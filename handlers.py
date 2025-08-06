@@ -229,7 +229,7 @@ async def handle_post_creation(update: Update, context: ContextTypes.DEFAULT_TYP
 
     message = update.message
     
-    # Verificar si es un mensaje reenviado
+    # Verificar si el mensaje es un reenvío
     if not message.forward and context.user_data.get('state') != 'waiting_for_post':
         return
 
@@ -259,10 +259,10 @@ async def handle_post_creation(update: Update, context: ContextTypes.DEFAULT_TYP
         source_message_id = None
         
         if message.forward:  # Asegúrate de que se está usando el atributo correcto
-            source_channel = str(message.forward.chat.id)  # Asegúrate de extraerlo correctamente
-            source_message_id = message.forward.message_id  # Obtén el ID del mensaje reenviado
+            source_channel = str(message.forward.chat.id)  # El canal del mensaje original
+            source_message_id = message.forward.message_id  # ID del mensaje reenviado
         else:
-            source_channel = str(message.chat.id)  # Si no es un reenvío, usa el ID del chat actual
+            source_channel = str(message.chat.id)  # ID del chat actual
             source_message_id = message.message_id  # ID del mensaje actual
         
         # Crear post
