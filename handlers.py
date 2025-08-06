@@ -1,4 +1,4 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
 from telegram.ext import ContextTypes
 from database import get_session, Post, PostSchedule, Channel, PostChannel, ScheduledJob
 from config import ADMIN_ID, MAX_POSTS, MAX_CHANNELS_PER_POST
@@ -92,6 +92,26 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         post_id = int(data.split('_')[2])
         await save_days(query, context, post_id)
     
+    # Nuevas funciones
+    elif data.startswith("toggle_pin_"):
+        post_id = int(data.split('_')[2])
+        await toggle_pin_message(query, context, post_id)
+    elif data.startswith("toggle_forward_"):
+        post_id = int(data.split('_')[2])
+        await toggle_forward_original(query, context, post_id)
+    elif data.startswith("send_now_"):
+        post_id = int(data.split('_')[2])
+        await send_post_manually(query, context, post_id)
+    elif data.startswith("confirm_send_"):
+        post_id = int(data.split('_')[2])
+        await confirm_manual_send(query, context, post_id)
+    elif data.startswith("preview_"):
+        post_id = int(data.split('_')[1])
+        await preview_post(query, context, post_id)
+    elif data.startswith("send_preview_"):
+        post_id = int(data.split('_')[2])
+        await send_preview_to_admin(query, context, post_id)
+    
     # Gestión de canales
     elif data == "add_channel":
         await prompt_add_channel(query, context)
@@ -167,6 +187,8 @@ async def handle_post_action(query, data):
     keyboard = [
         [InlineKeyboardButton("⏰ Configurar Horario", callback_data=f"configure_schedule_{post.id}")],
         [InlineKeyboardButton("📺 Asignar Canales", callback_data=f"configure_channels_{post.id}")],
+        [InlineKeyboardButton("👀 Vista Previa", callback_data=f"preview_{post.id}"),
+         InlineKeyboardButton("📤 Enviar Ahora", callback_data=f"send_now_{post.id}")],
         [InlineKeyboardButton("🗑️ Eliminar Post", callback_data=f"delete_post_{post.id}")],
         [InlineKeyboardButton("🔙 Volver", callback_data="list_posts")]
     ]
@@ -204,14 +226,15 @@ async def handle_post_creation(update: Update, context: ContextTypes.DEFAULT_TYP
     if update.effective_user.id != ADMIN_ID:
         return
     
-    if context.user_data.get('state') != 'waiting_for_post':
-        return
-    
     message = update.message
     
-    if not message.forward_origin:
-        await message.reply_text("❌ Por favor reenvía un mensaje desde un canal.")
+    # Verificar si es un mensaje reenviado o si estamos esperando contenido
+    if not message.forward_origin and context.user_data.get('state') != 'waiting_for_post':
         return
+    
+    # Si no estamos en estado de espera, activarlo automáticamente para mensajes reenviados
+    if message.forward_origin and context.user_data.get('state') != 'waiting_for_post':
+        context.user_data['state'] = 'waiting_for_post'
     
     session = get_session()
     try:
@@ -219,6 +242,7 @@ async def handle_post_creation(update: Update, context: ContextTypes.DEFAULT_TYP
         
         if post_count >= MAX_POSTS:
             await message.reply_text(f"❌ Máximo {MAX_POSTS} posts permitidos. Elimina uno existente primero.")
+            context.user_data.pop('state', None)
             return
         
         # Detectar tipo de contenido
@@ -226,22 +250,31 @@ async def handle_post_creation(update: Update, context: ContextTypes.DEFAULT_TYP
         
         if not content_type:
             await message.reply_text("❌ Tipo de contenido no soportado.")
+            context.user_data.pop('state', None)
             return
         
         # Obtener información de la fuente
         source_channel = None
         source_message_id = None
         
-        if hasattr(message.forward_origin, 'chat'):
-            source_channel = str(message.forward_origin.chat.id)
-            source_message_id = message.forward_origin.message_id
+        if message.forward_origin:
+            if hasattr(message.forward_origin, 'chat'):
+                source_channel = str(message.forward_origin.chat.id)
+                source_message_id = message.forward_origin.message_id
+            elif hasattr(message.forward_origin, 'sender_user'):
+                source_channel = str(message.forward_origin.sender_user.id)
+                source_message_id = message.message_id
         else:
             source_channel = str(message.chat.id)
             source_message_id = message.message_id
         
         # Crear post
+        post_name = f"Post {post_count + 1}"
+        if text and len(text) > 20:
+            post_name = text[:20] + "..."
+        
         post = Post(
-            name=f"Post {post_count + 1}",
+            name=post_name,
             source_channel=source_channel,
             source_message_id=source_message_id,
             content_type=content_type,
@@ -257,19 +290,32 @@ async def handle_post_creation(update: Update, context: ContextTypes.DEFAULT_TYP
             post_id=post.id,
             send_time="09:00",
             delete_after_hours=24,
-            days_of_week="1,2,3,4,5,6,7"
+            days_of_week="1,2,3,4,5,6,7",
+            pin_message=False,
+            forward_original=True
         )
         session.add(schedule)
         session.commit()
         
         context.user_data.pop('state', None)
         
+        # Crear botones de acción rápida
+        keyboard = [
+            [InlineKeyboardButton("⚙️ Configurar", callback_data=f"post_{post.id}")],
+            [InlineKeyboardButton("📺 Asignar Canales", callback_data=f"configure_channels_{post.id}")],
+            [InlineKeyboardButton("📤 Enviar Ahora", callback_data=f"send_now_{post.id}")],
+            [InlineKeyboardButton("🏠 Menú Principal", callback_data="back_main")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
         await message.reply_text(
             f"✅ **Post creado exitosamente!**\n\n"
             f"**ID:** {post.id}\n"
             f"**Nombre:** {post.name}\n"
-            f"**Tipo:** {content_type.title()}\n\n"
-            f"Usa /start para configurar horarios y canales.",
+            f"**Tipo:** {content_type.title()}\n"
+            f"**Fuente:** `{source_channel}`\n\n"
+            f"¿Qué quieres hacer ahora?",
+            reply_markup=reply_markup,
             parse_mode='Markdown'
         )
         
@@ -277,6 +323,7 @@ async def handle_post_creation(update: Update, context: ContextTypes.DEFAULT_TYP
         session.rollback()
         logger.error(f"Error creating post: {e}")
         await message.reply_text(f"❌ Error al crear el post: {str(e)}")
+        context.user_data.pop('state', None)
     finally:
         session.close()
 
@@ -335,10 +382,15 @@ async def configure_schedule_menu(query, post_id):
     current_days = [int(d) for d in schedule.days_of_week.split(',')]
     days_display = ", ".join([days_map[d] for d in current_days])
     
+    pin_status = "✅" if schedule.pin_message else "❌"
+    forward_status = "✅" if schedule.forward_original else "❌"
+    
     keyboard = [
         [InlineKeyboardButton(f"🕐 Hora: {schedule.send_time}", callback_data=f"set_time_{post_id}")],
         [InlineKeyboardButton(f"⏰ Eliminar después: {schedule.delete_after_hours}h", callback_data=f"set_delete_{post_id}")],
         [InlineKeyboardButton(f"📅 Días: {days_display}", callback_data=f"set_days_{post_id}")],
+        [InlineKeyboardButton(f"📌 Fijar mensaje: {pin_status}", callback_data=f"toggle_pin_{post_id}")],
+        [InlineKeyboardButton(f"📤 Reenviar original: {forward_status}", callback_data=f"toggle_forward_{post_id}")],
         [InlineKeyboardButton("🔙 Volver", callback_data=f"post_{post_id}")]
     ]
     
@@ -351,6 +403,46 @@ async def configure_schedule_menu(query, post_id):
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
+
+async def toggle_pin_message(query, context: ContextTypes.DEFAULT_TYPE, post_id):
+    session = get_session()
+    try:
+        schedule = session.query(PostSchedule).filter_by(post_id=post_id).first()
+        if schedule:
+            schedule.pin_message = not schedule.pin_message
+            session.commit()
+            
+            status = "activado" if schedule.pin_message else "desactivado"
+            await query.answer(f"✅ Fijar mensaje {status}")
+            await configure_schedule_menu(query, post_id)
+        else:
+            await query.edit_message_text("❌ Horario no encontrado.")
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error toggling pin: {e}")
+        await query.edit_message_text(f"❌ Error: {str(e)}")
+    finally:
+        session.close()
+
+async def toggle_forward_original(query, context: ContextTypes.DEFAULT_TYPE, post_id):
+    session = get_session()
+    try:
+        schedule = session.query(PostSchedule).filter_by(post_id=post_id).first()
+        if schedule:
+            schedule.forward_original = not schedule.forward_original
+            session.commit()
+            
+            status = "activado" if schedule.forward_original else "desactivado"
+            await query.answer(f"✅ Reenvío original {status}")
+            await configure_schedule_menu(query, post_id)
+        else:
+            await query.edit_message_text("❌ Horario no encontrado.")
+    except Exception as e:
+        session.rollback()
+        logger.error(f"Error toggling forward: {e}")
+        await query.edit_message_text(f"❌ Error: {str(e)}")
+    finally:
+        session.close()
 
 async def prompt_set_time(query, context: ContextTypes.DEFAULT_TYPE, post_id):
     context.user_data['state'] = 'waiting_time'
@@ -463,6 +555,249 @@ async def save_days(query, context: ContextTypes.DEFAULT_TYPE, post_id):
     finally:
         session.close()
 
+# --- ENVÍO MANUAL Y VISTA PREVIA ---
+async def send_post_manually(query, context: ContextTypes.DEFAULT_TYPE, post_id):
+    """Enviar post manualmente a todos los canales asignados"""
+    session = get_session()
+    try:
+        post = session.query(Post).filter_by(id=post_id, is_active=True).first()
+        if not post:
+            await query.edit_message_text("❌ Post no encontrado.")
+            return
+        
+        post_channels = session.query(PostChannel).filter_by(post_id=post_id).all()
+        if not post_channels:
+            await query.edit_message_text("❌ No hay canales asignados a este post.")
+            return
+        
+        schedule = session.query(PostSchedule).filter_by(post_id=post_id).first()
+        
+        # Mensaje de confirmación
+        keyboard = [
+            [InlineKeyboardButton("✅ Sí, Enviar", callback_data=f"confirm_send_{post_id}")],
+            [InlineKeyboardButton("❌ Cancelar", callback_data=f"post_{post_id}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            f"📤 **Envío Manual**\n\n"
+            f"**Post:** {post.name}\n"
+            f"**Canales:** {len(post_channels)}\n"
+            f"**Tipo:** {post.content_type.title()}\n\n"
+            f"¿Confirmas el envío manual?",
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+        
+    finally:
+        session.close()
+
+async def confirm_manual_send(query, context: ContextTypes.DEFAULT_TYPE, post_id):
+    """Confirmar y ejecutar envío manual"""
+    await query.edit_message_text("📤 Enviando post...")
+    
+    session = get_session()
+    try:
+        post = session.query(Post).filter_by(id=post_id, is_active=True).first()
+        post_channels = session.query(PostChannel).filter_by(post_id=post_id).all()
+        schedule = session.query(PostSchedule).filter_by(post_id=post_id).first()
+        
+        if not post or not post_channels:
+            await query.edit_message_text("❌ Error: Post o canales no encontrados.")
+            return
+        
+        sent_count = 0
+        error_count = 0
+        sent_messages = []
+        
+        for pc in post_channels:
+            try:
+                # Enviar mensaje
+                message = await send_content_to_channel(context.bot, pc.channel_id, post, schedule)
+                
+                if message:
+                    sent_count += 1
+                    sent_messages.append({
+                        'channel_id': pc.channel_id,
+                        'message_id': message.message_id
+                    })
+                    
+                    # Fijar si está configurado
+                    if schedule and schedule.pin_message:
+                        try:
+                            await context.bot.pin_chat_message(
+                                chat_id=pc.channel_id,
+                                message_id=message.message_id,
+                                disable_notification=True
+                            )
+                        except Exception as pin_error:
+                            logger.warning(f"No se pudo fijar mensaje: {pin_error}")
+                    
+                    # Programar eliminación si está configurado
+                    if schedule and schedule.delete_after_hours > 0:
+                        from scheduler import schedule_message_deletion
+                        schedule_message_deletion(
+                            context.bot, 
+                            pc.channel_id, 
+                            message.message_id, 
+                            schedule.delete_after_hours
+                        )
+                else:
+                    error_count += 1
+                    
+            except Exception as e:
+                error_count += 1
+                logger.error(f"Error sending to channel {pc.channel_id}: {e}")
+        
+        # Mostrar resultado
+        result_text = f"📊 **Resultado del Envío**\n\n"
+        result_text += f"✅ **Enviados:** {sent_count}\n"
+        result_text += f"❌ **Errores:** {error_count}\n"
+        result_text += f"📺 **Total canales:** {len(post_channels)}\n\n"
+        
+        if schedule and schedule.delete_after_hours > 0:
+            result_text += f"⏰ **Eliminación programada:** {schedule.delete_after_hours}h\n"
+        
+        if schedule and schedule.pin_message:
+            result_text += f"📌 **Mensajes fijados**\n"
+        
+        keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data=f"post_{post_id}")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            result_text,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+        
+    except Exception as e:
+        logger.error(f"Error in manual send: {e}")
+        await query.edit_message_text(f"❌ Error durante el envío: {str(e)}")
+    finally:
+        session.close()
+
+async def preview_post(query, context: ContextTypes.DEFAULT_TYPE, post_id):
+    """Mostrar vista previa del post"""
+    session = get_session()
+    try:
+        post = session.query(Post).filter_by(id=post_id).first()
+        if not post:
+            await query.edit_message_text("❌ Post no encontrado.")
+            return
+        
+        # Enviar vista previa al admin
+        preview_text = f"👀 **Vista Previa del Post**\n\n"
+        
+        if post.content_type == 'text':
+            preview_text += f"**Contenido:**\n{post.content_text}"
+        else:
+            preview_text += f"**Tipo:** {post.content_type.title()}\n"
+            if post.content_text:
+                preview_text += f"**Caption:** {post.content_text}\n"
+            preview_text += f"**Archivo ID:** `{post.file_id}`"
+        
+        keyboard = [
+            [InlineKeyboardButton("📤 Enviar Vista Previa", callback_data=f"send_preview_{post_id}")],
+            [InlineKeyboardButton("🔙 Volver", callback_data=f"post_{post_id}")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            preview_text,
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+        
+    finally:
+        session.close()
+
+async def send_preview_to_admin(query, context: ContextTypes.DEFAULT_TYPE, post_id):
+    """Enviar vista previa real del contenido"""
+    session = get_session()
+    try:
+        post = session.query(Post).filter_by(id=post_id).first()
+        if not post:
+            await query.answer("❌ Post no encontrado")
+            return
+        
+        # Enviar el contenido real al admin como vista previa
+        admin_id = query.from_user.id
+        
+        try:
+            await send_content_to_channel(context.bot, admin_id, post)
+            await query.answer("✅ Vista previa enviada")
+        except Exception as e:
+            await query.answer(f"❌ Error: {str(e)}")
+            
+    finally:
+        session.close()
+
+async def send_content_to_channel(bot: Bot, channel_id: str, post: Post, schedule: PostSchedule = None):
+    """Envía contenido a un canal específico"""
+    try:
+        # Si está configurado para reenviar original y tenemos la info
+        if schedule and schedule.forward_original and post.source_channel and post.source_message_id:
+            try:
+                return await bot.forward_message(
+                    chat_id=channel_id,
+                    from_chat_id=post.source_channel,
+                    message_id=post.source_message_id
+                )
+            except Exception as e:
+                logger.warning(f"No se pudo reenviar original: {e}")
+        
+        # Enviar contenido guardado
+        if post.content_type == 'text':
+            return await bot.send_message(
+                chat_id=channel_id,
+                text=post.content_text
+            )
+        elif post.content_type == 'photo':
+            return await bot.send_photo(
+                chat_id=channel_id,
+                photo=post.file_id,
+                caption=post.content_text
+            )
+        elif post.content_type == 'video':
+            return await bot.send_video(
+                chat_id=channel_id,
+                video=post.file_id,
+                caption=post.content_text
+            )
+        elif post.content_type == 'audio':
+            return await bot.send_audio(
+                chat_id=channel_id,
+                audio=post.file_id,
+                caption=post.content_text
+            )
+        elif post.content_type == 'document':
+            return await bot.send_document(
+                chat_id=channel_id,
+                document=post.file_id,
+                caption=post.content_text
+            )
+        elif post.content_type == 'animation':
+            return await bot.send_animation(
+                chat_id=channel_id,
+                animation=post.file_id,
+                caption=post.content_text
+            )
+        elif post.content_type == 'sticker':
+            return await bot.send_sticker(
+                chat_id=channel_id,
+                sticker=post.file_id
+            )
+        elif post.content_type == 'voice':
+            return await bot.send_voice(
+                chat_id=channel_id,
+                voice=post.file_id,
+                caption=post.content_text
+            )
+            
+    except Exception as e:
+        logger.error(f"Error sending content to {channel_id}: {e}")
+        return None
+
 # --- GESTIÓN DE CANALES ---
 async def manage_channels_menu(query):
     keyboard = [
@@ -479,6 +814,28 @@ async def manage_channels_menu(query):
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
+
+async def verify_bot_permissions(bot: Bot, channel_id: str):
+    """Verifica si el bot es administrador del canal"""
+    try:
+        chat_member = await bot.get_chat_member(channel_id, bot.id)
+        
+        if chat_member.status not in ['administrator', 'creator']:
+            return False, f"El bot no es administrador en el canal"
+        
+        # Verificar permisos específicos
+        if chat_member.status == 'administrator':
+            if not chat_member.can_post_messages:
+                return False, f"El bot no tiene permisos para enviar mensajes"
+            if not chat_member.can_delete_messages:
+                return False, f"El bot no tiene permisos para eliminar mensajes"
+            if not chat_member.can_pin_messages:
+                return False, f"El bot no tiene permisos para fijar mensajes"
+        
+        return True, "Permisos correctos"
+        
+    except Exception as e:
+        return False, f"Error verificando permisos: {str(e)}"
 
 async def prompt_add_channel(query, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['state'] = 'waiting_channel'
@@ -825,29 +1182,63 @@ async def handle_channel_input(update, context, text):
         )
         return
     
+    # Mensaje de verificación
+    verification_msg = await update.message.reply_text("🔍 Verificando canal y permisos...")
+    
     session = get_session()
     try:
         # Verificar si ya existe
         existing = session.query(Channel).filter_by(channel_id=channel_info).first()
         if existing:
-            await update.message.reply_text("❌ Este canal ya está registrado")
+            await verification_msg.edit_text("❌ Este canal ya está registrado")
             return
         
         # Intentar obtener información del canal
         channel_name = None
         channel_username = None
+        channel_id_final = channel_info
         
         try:
             chat = await context.bot.get_chat(channel_info)
-            channel_info = str(chat.id)
+            channel_id_final = str(chat.id)
             channel_name = chat.title
             channel_username = chat.username
+            
+            # Verificar permisos del bot
+            has_permissions, permission_msg = await verify_bot_permissions(context.bot, channel_id_final)
+            
+            if not has_permissions:
+                await verification_msg.edit_text(
+                    f"⚠️ **Canal encontrado pero hay problemas:**\n\n"
+                    f"**Canal:** {channel_name or channel_info}\n"
+                    f"**Problema:** {permission_msg}\n\n"
+                    f"**Solución:**\n"
+                    f"1. Ve al canal\n"
+                    f"2. Añade el bot como administrador\n"
+                    f"3. Dale permisos para:\n"
+                    f"   • Enviar mensajes\n"
+                    f"   • Eliminar mensajes\n"
+                    f"   • Fijar mensajes\n"
+                    f"4. Intenta añadir el canal nuevamente",
+                    parse_mode='Markdown'
+                )
+                return
+            
         except Exception as e:
-            logger.warning(f"Could not get chat info for {channel_info}: {e}")
+            await verification_msg.edit_text(
+                f"❌ **No se pudo acceder al canal:**\n\n"
+                f"**Error:** {str(e)}\n\n"
+                f"**Posibles causas:**\n"
+                f"• El canal no existe\n"
+                f"• El bot no está en el canal\n"
+                f"• El canal es privado\n"
+                f"• Formato incorrecto"
+            )
+            return
         
         # Crear canal
         channel = Channel(
-            channel_id=channel_info,
+            channel_id=channel_id_final,
             channel_name=channel_name,
             channel_username=channel_username
         )
@@ -857,12 +1248,19 @@ async def handle_channel_input(update, context, text):
         
         context.user_data.pop('state', None)
         
-        await update.message.reply_text(f"✅ Canal añadido: `{channel_info}`", parse_mode='Markdown')
+        await verification_msg.edit_text(
+            f"✅ **Canal añadido exitosamente!**\n\n"
+            f"**Nombre:** {channel_name or 'Sin nombre'}\n"
+            f"**Username:** @{channel_username or 'Sin username'}\n"
+            f"**ID:** `{channel_id_final}`\n"
+            f"**Permisos:** ✅ Verificados",
+            parse_mode='Markdown'
+        )
         
     except Exception as e:
         session.rollback()
         logger.error(f"Error adding channel: {e}")
-        await update.message.reply_text(f"❌ Error: {str(e)}")
+        await verification_msg.edit_text(f"❌ Error: {str(e)}")
     finally:
         session.close()
 
