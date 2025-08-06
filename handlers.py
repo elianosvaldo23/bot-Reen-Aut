@@ -225,15 +225,15 @@ async def create_post_prompt(query, context: ContextTypes.DEFAULT_TYPE):
 async def handle_post_creation(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
         return
-    
+
     message = update.message
     
-    # Verificar si es un mensaje reenviado o si estamos esperando contenido
-    if not message.forward_origin and context.user_data.get('state') != 'waiting_for_post':
+    # Verificar si es un mensaje reenviado
+    if not message.is_forward and context.user_data.get('state') != 'waiting_for_post':
         return
-    
-    # Si no estamos en estado de espera, activarlo automáticamente para mensajes reenviados
-    if message.forward_origin and context.user_data.get('state') != 'waiting_for_post':
+
+    # Si es un mensaje reenviado, activar el estado de espera para contenido
+    if message.is_forward and context.user_data.get('state') != 'waiting_for_post':
         context.user_data['state'] = 'waiting_for_post'
     
     session = get_session()
@@ -816,21 +816,21 @@ async def manage_channels_menu(query):
     )
 
 async def verify_bot_permissions(bot: Bot, channel_id: str):
-    """Verifica si el bot es administrador del canal"""
+    """Verifica si el bot es administrador del canal y tiene los permisos requeridos"""
     try:
         chat_member = await bot.get_chat_member(channel_id, bot.id)
         
         if chat_member.status not in ['administrator', 'creator']:
-            return False, f"El bot no es administrador en el canal"
+            return False, "El bot no es administrador en el canal"
         
         # Verificar permisos específicos
         if chat_member.status == 'administrator':
             if not chat_member.can_post_messages:
-                return False, f"El bot no tiene permisos para enviar mensajes"
+                return False, "El bot no tiene permisos para enviar mensajes"
+            if not chat_member.can_edit_messages:
+                return False, "El bot no tiene permisos para editar mensajes"
             if not chat_member.can_delete_messages:
-                return False, f"El bot no tiene permisos para eliminar mensajes"
-            if not chat_member.can_pin_messages:
-                return False, f"El bot no tiene permisos para fijar mensajes"
+                return False, "El bot no tiene permisos para eliminar mensajes"
         
         return True, "Permisos correctos"
         
@@ -1170,7 +1170,7 @@ async def handle_delete_hours_input(update, context, text):
     finally:
         session.close()
 
-async def handle_channel_input(update, context, text):
+async def handle_channel_input(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
     channel_info = extract_channel_info(text)
     
     if not channel_info:
@@ -1216,9 +1216,9 @@ async def handle_channel_input(update, context, text):
                     f"1. Ve al canal\n"
                     f"2. Añade el bot como administrador\n"
                     f"3. Dale permisos para:\n"
-                    f"   • Enviar mensajes\n"
-                    f"   • Eliminar mensajes\n"
-                    f"   • Fijar mensajes\n"
+                    f"   • Publicar mensajes\n"
+                    f"   • Editar mensajes de otros\n"
+                    f"   • Eliminar mensajes de otros\n"
                     f"4. Intenta añadir el canal nuevamente",
                     parse_mode='Markdown'
                 )
@@ -1246,6 +1246,16 @@ async def handle_channel_input(update, context, text):
         session.add(channel)
         session.commit()
         
+        # Enviar mensaje de confirmación al canal
+        confirmation_message = await context.bot.send_message(
+            chat_id=channel_id_final,
+            text=f"✅ El bot ha sido añadido correctamente al canal: {channel_name or 'Sin nombre'}"
+        )
+        
+        # Programar eliminación del mensaje de confirmación en 30 segundos
+        await asyncio.sleep(30)
+        await context.bot.delete_message(chat_id=channel_id_final, message_id=confirmation_message.message_id)
+
         context.user_data.pop('state', None)
         
         await verification_msg.edit_text(
