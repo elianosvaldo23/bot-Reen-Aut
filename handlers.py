@@ -258,12 +258,12 @@ async def handle_post_creation(update: Update, context: ContextTypes.DEFAULT_TYP
         source_channel = None
         source_message_id = None
         
-        if message.forward_origin:
-            if hasattr(message.forward_origin, 'chat'):
-                source_channel = str(message.forward_origin.chat.id)
-                source_message_id = message.forward_origin.message_id
-            elif hasattr(message.forward_origin, 'sender_user'):
-                source_channel = str(message.forward_origin.sender_user.id)
+        if message.forward:  # Cambiado para usar message.forward
+            if hasattr(message.forward, 'chat'):
+                source_channel = str(message.forward.chat.id)
+                source_message_id = message.forward.message_id
+            elif hasattr(message.forward, 'sender_user'):
+                source_channel = str(message.forward.sender_user.id)
                 source_message_id = message.message_id
         else:
             source_channel = str(message.chat.id)
