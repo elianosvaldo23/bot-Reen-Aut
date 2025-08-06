@@ -228,7 +228,7 @@ async def handle_post_creation(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     message = update.message
-    
+
     # Verificar si el mensaje es un reenvío
     if not message.forward:
         await message.reply_text("❌ Este mensaje no es un reenvío. Por favor, reenvía un mensaje.")
@@ -236,31 +236,44 @@ async def handle_post_creation(update: Update, context: ContextTypes.DEFAULT_TYP
 
     # Si es un mensaje reenviado, activar el estado de espera para contenido
     context.user_data['state'] = 'waiting_for_post'
-    
+
     session = get_session()
     try:
         post_count = session.query(Post).filter_by(is_active=True).count()
-        
+
         if post_count >= MAX_POSTS:
             await message.reply_text(f"❌ Máximo {MAX_POSTS} posts permitidos. Elimina uno existente primero.")
             return
-        
+
         # Detectar tipo de contenido
         content_type, file_id, text = extract_content_info(message)
-        
+
         if not content_type:
             await message.reply_text("❌ Tipo de contenido no soportado.")
             return
-        
+
         # Obtener información de la fuente
-        source_channel = str(message.forward.chat.id)  # Accede al chat del mensaje original
-        source_message_id = message.forward.message_id  # ID del mensaje reenviado
-        
+        source_channel = None
+        source_message_id = None
+
+        # Comprobamos si el mensaje es un reenvío
+        if message.forward:
+            # Verificar si forward es un objeto válido
+            if hasattr(message.forward, 'chat') and hasattr(message.forward, 'message_id'):
+                source_channel = str(message.forward.chat.id)  # Accede al chat del mensaje original
+                source_message_id = message.forward.message_id  # ID del mensaje reenviado
+            else:
+                await message.reply_text("❌ No se puede acceder a la información del mensaje reenviado.")
+                return
+        else:
+            source_channel = str(message.chat.id)  # ID del chat actual
+            source_message_id = message.message_id  # ID del mensaje actual
+
         # Crear post
         post_name = f"Post {post_count + 1}"
         if text and len(text) > 20:
             post_name = text[:20] + "..."
-        
+
         post = Post(
             name=post_name,
             source_channel=source_channel,
@@ -269,10 +282,10 @@ async def handle_post_creation(update: Update, context: ContextTypes.DEFAULT_TYP
             content_text=text or "",
             file_id=file_id
         )
-        
+
         session.add(post)
         session.commit()
-        
+
         # Crear horario por defecto
         schedule = PostSchedule(
             post_id=post.id,
@@ -284,7 +297,9 @@ async def handle_post_creation(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         session.add(schedule)
         session.commit()
-        
+
+        context.user_data.pop('state', None)
+
         # Crear botones de acción rápida
         keyboard = [
             [InlineKeyboardButton("⚙️ Configurar", callback_data=f"post_{post.id}")],
@@ -293,7 +308,7 @@ async def handle_post_creation(update: Update, context: ContextTypes.DEFAULT_TYP
             [InlineKeyboardButton("🏠 Menú Principal", callback_data="back_main")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        
+
         await message.reply_text(
             f"✅ **Post creado exitosamente!**\n\n"
             f"**ID:** {post.id}\n"
@@ -304,7 +319,7 @@ async def handle_post_creation(update: Update, context: ContextTypes.DEFAULT_TYP
             reply_markup=reply_markup,
             parse_mode='Markdown'
         )
-        
+
     except Exception as e:
         session.rollback()
         logger.error(f"Error creating post: {e}")
