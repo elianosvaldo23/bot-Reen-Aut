@@ -3,7 +3,9 @@ from apscheduler.triggers.cron import CronTrigger
 from telegram import Bot
 from database import Post, PostSchedule, PostChannel, ScheduledJob
 from datetime import datetime, timedelta
+from config import TIMEZONE
 import logging
+import pytz
 
 logger = logging.getLogger(__name__)
 scheduler = None
@@ -11,10 +13,12 @@ scheduler = None
 def start_scheduler(application):
     global scheduler
     if scheduler is None:
-        scheduler = AsyncIOScheduler()
+        # Configurar scheduler con timezone de Cuba
+        cuba_tz = pytz.timezone(TIMEZONE)
+        scheduler = AsyncIOScheduler(timezone=cuba_tz)
         scheduler.start()
         schedule_all_posts(application.bot)
-        logger.info("Scheduler iniciado")
+        logger.info(f"Scheduler iniciado con timezone: {TIMEZONE}")
 
 def schedule_all_posts(bot):
     try:
@@ -41,13 +45,14 @@ def schedule_post(bot: Bot, post: Post, schedule: PostSchedule):
             trigger=CronTrigger(
                 day_of_week=aps_days,
                 hour=hour,
-                minute=minute
+                minute=minute,
+                timezone=TIMEZONE
             ),
             args=[bot, str(post._id)],
             id=f"send_{str(post._id)}",
             replace_existing=True
         )
-        logger.info(f"Programado post {str(post._id)} para {schedule.send_time} días {aps_days}")
+        logger.info(f"Programado post {str(post._id)} para {schedule.send_time} días {aps_days} (timezone: {TIMEZONE})")
     except Exception as e:
         logger.error(f"Error programando post {str(post._id)}: {e}")
 
@@ -102,7 +107,8 @@ async def send_post_to_channels(bot: Bot, post_id: str):
                     
                     # Programar eliminación
                     if schedule.delete_after_hours > 0:
-                        delete_time = datetime.utcnow() + timedelta(hours=schedule.delete_after_hours)
+                        cuba_tz = pytz.timezone(TIMEZONE)
+                        delete_time = datetime.now(cuba_tz) + timedelta(hours=schedule.delete_after_hours)
                         scheduler.add_job(
                             delete_message,
                             trigger='date',
@@ -182,7 +188,8 @@ async def delete_message(bot: Bot, channel_id: str, message_id: int):
 
 def schedule_message_deletion(bot: Bot, channel_id: str, message_id: int, hours: int):
     """Programar eliminación de mensaje específico"""
-    delete_time = datetime.utcnow() + timedelta(hours=hours)
+    cuba_tz = pytz.timezone(TIMEZONE)
+    delete_time = datetime.now(cuba_tz) + timedelta(hours=hours)
     scheduler.add_job(
         delete_message,
         trigger='date',
