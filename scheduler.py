@@ -1,7 +1,7 @@
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from telegram import Bot
-from database import get_session, Post, PostSchedule, PostChannel, ScheduledJob
+from database import Post, PostSchedule, PostChannel, ScheduledJob
 from datetime import datetime, timedelta
 import logging
 
@@ -17,18 +17,17 @@ def start_scheduler(application):
         logger.info("Scheduler iniciado")
 
 def schedule_all_posts(bot):
-    session = get_session()
     try:
-        posts = session.query(Post).filter_by(is_active=True).all()
+        posts = Post.find_active()
         for post in posts:
-            schedule = session.query(PostSchedule).filter_by(post_id=post.id, is_enabled=True).first()
+            schedule = PostSchedule.find_by_post_id(str(post._id))
             if schedule:
                 schedule_post(bot, post, schedule)
-    finally:
-        session.close()
+    except Exception as e:
+        logger.error(f"Error scheduling all posts: {e}")
 
 def schedule_post(bot: Bot, post: Post, schedule: PostSchedule):
-    remove_post_jobs(post.id)
+    remove_post_jobs(str(post._id))
     
     days = [int(d) for d in schedule.days_of_week.split(',')]
     hour, minute = map(int, schedule.send_time.split(':'))
@@ -44,29 +43,28 @@ def schedule_post(bot: Bot, post: Post, schedule: PostSchedule):
                 hour=hour,
                 minute=minute
             ),
-            args=[bot, post.id],
-            id=f"send_{post.id}",
+            args=[bot, str(post._id)],
+            id=f"send_{str(post._id)}",
             replace_existing=True
         )
-        logger.info(f"Programado post {post.id} para {schedule.send_time} días {aps_days}")
+        logger.info(f"Programado post {str(post._id)} para {schedule.send_time} días {aps_days}")
     except Exception as e:
-        logger.error(f"Error programando post {post.id}: {e}")
+        logger.error(f"Error programando post {str(post._id)}: {e}")
 
-async def send_post_to_channels(bot: Bot, post_id: int):
-    session = get_session()
+async def send_post_to_channels(bot: Bot, post_id: str):
     try:
-        post = session.query(Post).filter_by(id=post_id, is_active=True).first()
+        post = Post.find_by_id(post_id)
         if not post:
             return
         
-        post_channels = session.query(PostChannel).filter_by(post_id=post_id).all()
+        post_channels = PostChannel.find_by_post_id(post_id)
         channels = [pc.channel_id for pc in post_channels]
         
         if not channels:
             logger.warning(f"No hay canales para post {post_id}")
             return
         
-        schedule = session.query(PostSchedule).filter_by(post_id=post_id, is_enabled=True).first()
+        schedule = PostSchedule.find_by_post_id(post_id)
         if not schedule:
             return
         
@@ -110,7 +108,7 @@ async def send_post_to_channels(bot: Bot, post_id: int):
                             trigger='date',
                             run_date=delete_time,
                             args=[bot, channel_id, message.message_id],
-                            id=f"delete_{post.id}_{channel_id}_{message.message_id}",
+                            id=f"delete_{post_id}_{channel_id}_{message.message_id}",
                             replace_existing=True
                         )
                 
@@ -119,8 +117,8 @@ async def send_post_to_channels(bot: Bot, post_id: int):
             except Exception as e:
                 logger.error(f"Error enviando post {post_id} a {channel_id}: {e}")
     
-    finally:
-        session.close()
+    except Exception as e:
+        logger.error(f"Error in send_post_to_channels: {e}")
 
 async def send_content_by_type(bot: Bot, channel_id: str, post: Post):
     """Envía contenido según el tipo"""
@@ -194,19 +192,18 @@ def schedule_message_deletion(bot: Bot, channel_id: str, message_id: int, hours:
         replace_existing=True
     )
 
-def reschedule_post_job(bot: Bot, post_id: int):
-    session = get_session()
+def reschedule_post_job(bot: Bot, post_id: str):
     try:
-        post = session.query(Post).filter_by(id=post_id, is_active=True).first()
-        schedule = session.query(PostSchedule).filter_by(post_id=post_id, is_enabled=True).first()
+        post = Post.find_by_id(post_id)
+        schedule = PostSchedule.find_by_post_id(post_id)
         
         if post and schedule:
             schedule_post(bot, post, schedule)
             logger.info(f"Reprogramado post {post_id}")
-    finally:
-        session.close()
+    except Exception as e:
+        logger.error(f"Error rescheduling post {post_id}: {e}")
 
-def remove_post_jobs(post_id: int):
+def remove_post_jobs(post_id: str):
     send_job_id = f"send_{post_id}"
     if scheduler.get_job(send_job_id):
         scheduler.remove_job(send_job_id)
@@ -216,4 +213,3 @@ def stop_scheduler():
     if scheduler:
         scheduler.shutdown()
         logger.info("Scheduler detenido")
-    
