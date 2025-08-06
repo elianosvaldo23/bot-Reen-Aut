@@ -1,10 +1,12 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
 from telegram.ext import ContextTypes
 from database import Post, PostSchedule, Channel, PostChannel, ScheduledJob
-from config import ADMIN_ID, MAX_POSTS, MAX_CHANNELS_PER_POST
+from config import ADMIN_ID, MAX_POSTS, MAX_CHANNELS_PER_POST, TIMEZONE
 import re
 import logging
 import asyncio
+import pytz
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +22,11 @@ def admin_only(func):
         return await func(update, context)
     return wrapper
 
+def get_cuba_time():
+    """Obtiene la hora actual de Cuba"""
+    cuba_tz = pytz.timezone(TIMEZONE)
+    return datetime.now(cuba_tz)
+
 @admin_only
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
@@ -30,8 +37,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
+    cuba_time = get_cuba_time()
+    
     message_text = (
         "🤖 **Bienvenido al Auto Post Bot**\n\n"
+        f"🕐 **Hora actual (Cuba):** {cuba_time.strftime('%H:%M:%S')}\n"
+        f"📅 **Fecha:** {cuba_time.strftime('%d/%m/%Y')}\n\n"
         "Selecciona una opción:"
     )
     
@@ -116,6 +127,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Gestión de canales
     elif data == "add_channel":
         await prompt_add_channel(query, context)
+    elif data == "add_channels_bulk":
+        await prompt_add_channels_bulk(query, context)
     elif data == "remove_channel":
         await show_remove_channel_menu(query)
     elif data == "list_channels":
@@ -213,7 +226,8 @@ async def create_post_prompt(query, context: ContextTypes.DEFAULT_TYPE):
         "📤 **Para crear un post:**\n\n"
         "1. Ve al canal fuente\n"
         "2. **Reenvía** el mensaje al bot\n"
-        "3. El bot detectará automáticamente el contenido\n\n"
+        "3. El bot detectará automáticamente el contenido\n"
+        "4. Podrás asignarle un nombre personalizado\n\n"
         "**Tipos soportados:**\n"
         "• Texto, Fotos, Videos\n"
         "• Audio, Documentos, GIFs\n"
@@ -229,14 +243,10 @@ async def handle_post_creation(update: Update, context: ContextTypes.DEFAULT_TYP
 
     message = update.message
 
-    # Verificar si es un mensaje reenviado
-    if not message.reply_to_message and context.user_data.get('state') != 'waiting_for_post':
-        await message.reply_text("❌ Este mensaje no es un reenvío. Por favor, reenvía un mensaje.")
+    # Verificar si está en el estado correcto
+    if context.user_data.get('state') != 'waiting_for_post':
         return
 
-    # Si es un mensaje reenviado, activar el estado de espera para contenido
-    context.user_data['state'] = 'waiting_for_post'
-    
     try:
         post_count = Post.count_active()
 
@@ -255,68 +265,51 @@ async def handle_post_creation(update: Update, context: ContextTypes.DEFAULT_TYP
         source_channel = None
         source_message_id = None
 
-        # Usar reply_to_message para acceder al mensaje original
-        if message.reply_to_message:
-            source_channel = str(message.reply_to_message.chat.id)
-            source_message_id = message.reply_to_message.message_id
+        if message.forward_from_chat:
+            source_channel = str(message.forward_from_chat.id)
+            source_message_id = message.forward_from_message_id
         else:
             source_channel = str(message.chat.id)
             source_message_id = message.message_id
 
-        # Crear post
-        post_name = f"Post {post_count + 1}"
-        if text and len(text) > 20:
-            post_name = text[:20] + "..."
+        # Guardar información temporalmente para solicitar nombre
+        context.user_data['temp_post'] = {
+            'source_channel': source_channel,
+            'source_message_id': source_message_id,
+            'content_type': content_type,
+            'content_text': text or "",
+            'file_id': file_id
+        }
+        
+        # Cambiar estado para esperar nombre
+        context.user_data['state'] = 'waiting_post_name'
 
-        post = Post(
-            name=post_name,
-            source_channel=source_channel,
-            source_message_id=source_message_id,
-            content_type=content_type,
-            content_text=text or "",
-            file_id=file_id
-        )
+        # Sugerir nombre por defecto
+        default_name = f"Post {post_count + 1}"
+        if text and len(text) > 5:
+            # Tomar las primeras palabras del texto
+            words = text.split()[:3]
+            default_name = " ".join(words)
+            if len(default_name) > 25:
+                default_name = default_name[:25] + "..."
 
-        if not post.save():
-            await message.reply_text("❌ Error al crear el post.")
-            return
-
-        # Crear horario por defecto
-        schedule = PostSchedule(
-            post_id=str(post._id),
-            send_time="09:00",
-            delete_after_hours=24,
-            days_of_week="1,2,3,4,5,6,7",
-            pin_message=False,
-            forward_original=True
-        )
-        schedule.save()
-
-        context.user_data.pop('state', None)
-
-        # Crear botones de acción rápida
-        keyboard = [
-            [InlineKeyboardButton("⚙️ Configurar", callback_data=f"post_{str(post._id)}")],
-            [InlineKeyboardButton("📺 Asignar Canales", callback_data=f"configure_channels_{str(post._id)}")],
-            [InlineKeyboardButton("📤 Enviar Ahora", callback_data=f"send_now_{str(post._id)}")],
-            [InlineKeyboardButton("🏠 Menú Principal", callback_data="back_main")]
-        ]
+        keyboard = [[InlineKeyboardButton("🔙 Cancelar", callback_data="back_main")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         await message.reply_text(
-            f"✅ **Post creado exitosamente!**\n\n"
-            f"**ID:** {str(post._id)}\n"
-            f"**Nombre:** {post.name}\n"
+            f"✅ **Contenido detectado correctamente!**\n\n"
             f"**Tipo:** {content_type.title()}\n"
             f"**Fuente:** `{source_channel}`\n\n"
-            f"¿Qué quieres hacer ahora?",
+            f"📝 **Ahora envía un nombre para este post:**\n"
+            f"Ejemplo: `{default_name}`\n\n"
+            f"El nombre debe tener entre 3 y 50 caracteres.",
             reply_markup=reply_markup,
             parse_mode='Markdown'
         )
 
     except Exception as e:
         logger.error(f"Error creating post: {e}")
-        await message.reply_text(f"❌ Error al crear el post: {str(e)}")
+        await message.reply_text(f"❌ Error al procesar el contenido: {str(e)}")
 
 def extract_content_info(message):
     """Extrae información del contenido del mensaje"""
@@ -376,6 +369,11 @@ async def configure_schedule_menu(query, post_id):
     pin_status = "✅" if schedule.pin_message else "❌"
     forward_status = "✅" if schedule.forward_original else "❌"
     
+    # Obtener hora actual de Cuba
+    cuba_time = get_cuba_time()
+    current_time = cuba_time.strftime('%H:%M:%S')
+    current_date = cuba_time.strftime('%d/%m/%Y')
+    
     keyboard = [
         [InlineKeyboardButton(f"🕐 Hora: {schedule.send_time}", callback_data=f"set_time_{post_id}")],
         [InlineKeyboardButton(f"⏰ Eliminar después: {schedule.delete_after_hours}h", callback_data=f"set_delete_{post_id}")],
@@ -390,6 +388,8 @@ async def configure_schedule_menu(query, post_id):
     await query.edit_message_text(
         f"⚙️ **Configurar Horario**\n\n"
         f"**Post:** {post.name}\n\n"
+        f"🕐 **Hora actual (Cuba):** {current_time}\n"
+        f"📅 **Fecha:** {current_date}\n\n"
         f"Selecciona qué configurar:",
         reply_markup=reply_markup,
         parse_mode='Markdown'
@@ -439,13 +439,19 @@ async def prompt_set_time(query, context: ContextTypes.DEFAULT_TYPE, post_id):
     context.user_data['state'] = 'waiting_time'
     context.user_data['post_id'] = post_id
     
+    # Obtener hora actual de Cuba
+    cuba_time = get_cuba_time()
+    current_time = cuba_time.strftime('%H:%M')
+    
     keyboard = [[InlineKeyboardButton("🔙 Cancelar", callback_data=f"configure_schedule_{post_id}")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(
-        "🕐 **Configurar Hora de Envío**\n\n"
-        "Envía la hora en formato **HH:MM**\n"
-        "Ejemplos: `09:30`, `14:00`, `20:15`",
+        f"🕐 **Configurar Hora de Envío**\n\n"
+        f"🇨🇺 **Hora actual (Cuba):** {current_time}\n\n"
+        f"Envía la hora en formato **HH:MM**\n"
+        f"Ejemplos: `09:30`, `14:00`, `20:15`\n\n"
+        f"⏰ La hora se basa en el horario de Cuba",
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
@@ -812,6 +818,7 @@ async def send_content_to_channel(bot: Bot, channel_id: str, post: Post, schedul
 async def manage_channels_menu(query):
     keyboard = [
         [InlineKeyboardButton("➕ Añadir Canal", callback_data="add_channel")],
+        [InlineKeyboardButton("📝 Añadir Canales en Masa", callback_data="add_channels_bulk")],
         [InlineKeyboardButton("➖ Eliminar Canal", callback_data="remove_channel")],
         [InlineKeyboardButton("📋 Ver Canales", callback_data="list_channels")],
         [InlineKeyboardButton("🔙 Volver", callback_data="back_main")]
@@ -854,12 +861,34 @@ async def prompt_add_channel(query, context: ContextTypes.DEFAULT_TYPE):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(
-        "➕ **Añadir Canal**\n\n"
+        "➕ **Añadir Canal Individual**\n\n"
         "Envía el canal en uno de estos formatos:\n"
         "• `@nombre_canal`\n"
         "• `https://t.me/nombre_canal`\n"
         "• `-1001234567890` (ID)\n\n"
         "⚠️ El bot debe ser admin en el canal",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+async def prompt_add_channels_bulk(query, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['state'] = 'waiting_channels_bulk'
+    
+    keyboard = [[InlineKeyboardButton("🔙 Cancelar", callback_data="manage_channels")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        "📝 **Añadir Canales en Masa**\n\n"
+        "Envía múltiples canales, uno por línea:\n\n"
+        "**Ejemplo:**\n"
+        "`https://t.me/canal1`\n"
+        "`@canal2`\n"
+        "`https://t.me/canal3`\n"
+        "`-1001234567890`\n\n"
+        "⚠️ **Importante:**\n"
+        "• Un canal por línea\n"
+        "• El bot debe ser admin en todos\n"
+        "• Máximo 20 canales por vez",
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
@@ -1081,9 +1110,12 @@ async def show_statistics(query):
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     status = "🟢 Operativo" if total_posts > 0 else "🟡 Sin posts"
+    cuba_time = get_cuba_time()
     
     await query.edit_message_text(
         f"📊 **Estadísticas del Bot**\n\n"
+        f"🕐 **Hora (Cuba):** {cuba_time.strftime('%H:%M:%S')}\n"
+        f"📅 **Fecha:** {cuba_time.strftime('%d/%m/%Y')}\n\n"
         f"**Posts Activos:** {total_posts}/{MAX_POSTS}\n"
         f"**Canales:** {total_channels}\n"
         f"**Horarios:** {total_schedules}\n"
@@ -1100,15 +1132,83 @@ async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
     state = context.user_data.get('state')
     text = update.message.text.strip()
     
-    if state == 'waiting_time':
+    if state == 'waiting_post_name':
+        await handle_post_name_input(update, context, text)
+    elif state == 'waiting_time':
         await handle_time_input(update, context, text)
     elif state == 'waiting_delete_hours':
         await handle_delete_hours_input(update, context, text)
     elif state == 'waiting_channel':
         await handle_channel_input(update, context, text)
+    elif state == 'waiting_channels_bulk':
+        await handle_channels_bulk_input(update, context, text)
+
+async def handle_post_name_input(update, context, text):
+    """Manejar entrada del nombre del post"""
+    if len(text) < 3 or len(text) > 50:
+        await update.message.reply_text("❌ El nombre debe tener entre 3 y 50 caracteres.")
+        return
+    
+    try:
+        temp_post = context.user_data.get('temp_post')
+        if not temp_post:
+            await update.message.reply_text("❌ Error: No se encontró información del post.")
+            return
+        
+        # Crear post con el nombre personalizado
+        post = Post(
+            name=text,
+            source_channel=temp_post['source_channel'],
+            source_message_id=temp_post['source_message_id'],
+            content_type=temp_post['content_type'],
+            content_text=temp_post['content_text'],
+            file_id=temp_post['file_id']
+        )
+
+        if not post.save():
+            await update.message.reply_text("❌ Error al crear el post.")
+            return
+
+        # Crear horario por defecto
+        schedule = PostSchedule(
+            post_id=str(post._id),
+            send_time="09:00",
+            delete_after_hours=24,
+            days_of_week="1,2,3,4,5,6,7",
+            pin_message=False,
+            forward_original=True
+        )
+        schedule.save()
+
+        # Limpiar datos temporales
+        context.user_data.pop('state', None)
+        context.user_data.pop('temp_post', None)
+
+        # Crear botones de acción rápida
+        keyboard = [
+            [InlineKeyboardButton("⚙️ Configurar", callback_data=f"post_{str(post._id)}")],
+            [InlineKeyboardButton("📺 Asignar Canales", callback_data=f"configure_channels_{str(post._id)}")],
+            [InlineKeyboardButton("📤 Enviar Ahora", callback_data=f"send_now_{str(post._id)}")],
+            [InlineKeyboardButton("🏠 Menú Principal", callback_data="back_main")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await update.message.reply_text(
+            f"✅ **Post '{text}' creado exitosamente!**\n\n"
+            f"**ID:** {str(post._id)}\n"
+            f"**Tipo:** {post.content_type.title()}\n"
+            f"**Fuente:** `{temp_post['source_channel']}`\n\n"
+            f"¿Qué quieres hacer ahora?",
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+
+    except Exception as e:
+        logger.error(f"Error creating post with name: {e}")
+        await update.message.reply_text(f"❌ Error al crear el post: {str(e)}")
 
 async def handle_time_input(update, context, text):
-    if not re.match(r'^([01]?[0-9]|2[0-3]):[0-5][0-9]$$', text):
+    if not re.match(r'^([01]?[0-9]|2[0-3]):[0-5][0-9]$', text):
         await update.message.reply_text("❌ Formato inválido. Usa HH:MM (ej: 09:30)")
         return
     
@@ -1123,7 +1223,7 @@ async def handle_time_input(update, context, text):
             from scheduler import reschedule_post_job
             reschedule_post_job(context.bot, post_id)
             
-            await update.message.reply_text(f"✅ Hora configurada: {text}")
+            await update.message.reply_text(f"✅ Hora configurada: {text} (Horario de Cuba)")
             context.user_data.pop('state', None)
             context.user_data.pop('post_id', None)
         else:
@@ -1236,15 +1336,18 @@ async def handle_channel_input(update: Update, context: ContextTypes.DEFAULT_TYP
             return
 
         # Enviar mensaje de confirmación al canal
-        confirmation_message = await context.bot.send_message(
-            chat_id=channel_id_final,
-            text=f"✅ El bot ha sido añadido correctamente al canal: {channel_name or 'Sin nombre'}"
-        )
-
-        # Programar eliminación del mensaje de confirmación en 30 segundos
-        await asyncio.sleep(30)
         try:
-            await context.bot.delete_message(chat_id=channel_id_final, message_id=confirmation_message.message_id)
+            confirmation_message = await context.bot.send_message(
+                chat_id=channel_id_final,
+                text=f"✅ El bot ha sido añadido correctamente al canal: {channel_name or 'Sin nombre'}"
+            )
+
+            # Programar eliminación del mensaje de confirmación en 30 segundos
+            await asyncio.sleep(30)
+            try:
+                await context.bot.delete_message(chat_id=channel_id_final, message_id=confirmation_message.message_id)
+            except:
+                pass
         except:
             pass
 
@@ -1262,6 +1365,127 @@ async def handle_channel_input(update: Update, context: ContextTypes.DEFAULT_TYP
     except Exception as e:
         logger.error(f"Error adding channel: {e}")
         await verification_msg.edit_text(f"❌ Error: {str(e)}")
+
+async def handle_channels_bulk_input(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
+    """Manejar entrada de canales en masa"""
+    lines = text.strip().split('\n')
+    
+    if len(lines) > 20:
+        await update.message.reply_text("❌ Máximo 20 canales por vez")
+        return
+    
+    # Mensaje de progreso
+    progress_msg = await update.message.reply_text("🔄 Procesando canales...")
+    
+    channels_to_add = []
+    errors = []
+    
+    # Extraer información de cada línea
+    for i, line in enumerate(lines, 1):
+        line = line.strip()
+        if not line:
+            continue
+            
+        channel_info = extract_channel_info(line)
+        if not channel_info:
+            errors.append(f"Línea {i}: Formato inválido")
+            continue
+            
+        # Verificar si ya existe
+        existing = Channel.find_by_channel_id(channel_info)
+        if existing:
+            errors.append(f"Línea {i}: Canal ya registrado")
+            continue
+            
+        channels_to_add.append((i, channel_info, line))
+    
+    if not channels_to_add:
+        await progress_msg.edit_text("❌ No hay canales válidos para procesar")
+        return
+    
+    # Procesar cada canal
+    added_channels = []
+    
+    for line_num, channel_info, original_line in channels_to_add:
+        try:
+            await progress_msg.edit_text(f"🔍 Verificando canal {line_num}/{len(lines)}...")
+            
+            # Obtener información del canal
+            chat = await context.bot.get_chat(channel_info)
+            channel_id_final = str(chat.id)
+            channel_name = chat.title
+            channel_username = chat.username
+
+            # Verificar permisos
+            has_permissions, permission_msg = await verify_bot_permissions(context.bot, channel_id_final)
+            
+            if not has_permissions:
+                errors.append(f"Línea {line_num}: {permission_msg}")
+                continue
+
+            # Crear canal
+            channel = Channel(
+                channel_id=channel_id_final,
+                channel_name=channel_name,
+                channel_username=channel_username
+            )
+
+            if channel.save():
+                added_channels.append({
+                    'line': line_num,
+                    'name': channel_name or channel_username or channel_id_final,
+                    'id': channel_id_final
+                })
+                
+                # Enviar mensaje de confirmación (sin esperar)
+                try:
+                    confirmation_message = await context.bot.send_message(
+                        chat_id=channel_id_final,
+                        text=f"✅ Bot añadido correctamente"
+                    )
+                    # Programar eliminación en background
+                    asyncio.create_task(delete_confirmation_message(context.bot, channel_id_final, confirmation_message.message_id))
+                except:
+                    pass
+            else:
+                errors.append(f"Línea {line_num}: Error al guardar")
+                
+        except Exception as e:
+            errors.append(f"Línea {line_num}: {str(e)}")
+    
+    # Limpiar estado
+    context.user_data.pop('state', None)
+    
+    # Mostrar resultado
+    result_text = f"📊 **Resultado del Procesamiento**\n\n"
+    result_text += f"✅ **Añadidos:** {len(added_channels)}\n"
+    result_text += f"❌ **Errores:** {len(errors)}\n"
+    result_text += f"📝 **Total procesados:** {len(lines)}\n\n"
+    
+    if added_channels:
+        result_text += "**Canales añadidos:**\n"
+        for channel in added_channels[:10]:  # Mostrar solo los primeros 10
+            result_text += f"• {channel['name']}\n"
+        if len(added_channels) > 10:
+            result_text += f"• ... y {len(added_channels) - 10} más\n"
+        result_text += "\n"
+    
+    if errors:
+        result_text += "**Errores encontrados:**\n"
+        for error in errors[:5]:  # Mostrar solo los primeros 5 errores
+            result_text += f"• {error}\n"
+        if len(errors) > 5:
+            result_text += f"• ... y {len(errors) - 5} errores más\n"
+    
+    await progress_msg.edit_text(result_text, parse_mode='Markdown')
+
+async def delete_confirmation_message(bot: Bot, channel_id: str, message_id: int):
+    """Eliminar mensaje de confirmación después de 30 segundos"""
+    await asyncio.sleep(30)
+    try:
+        await bot.delete_message(chat_id=channel_id, message_id=message_id)
+    except:
+        pass
 
 def extract_channel_info(text):
     """Extrae información del canal del texto"""
