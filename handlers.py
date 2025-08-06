@@ -1,6 +1,6 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, Bot
 from telegram.ext import ContextTypes
-from database import get_session, Post, PostSchedule, Channel, PostChannel, ScheduledJob
+from database import Post, PostSchedule, Channel, PostChannel, ScheduledJob
 from config import ADMIN_ID, MAX_POSTS, MAX_CHANNELS_PER_POST
 import re
 import logging
@@ -63,54 +63,54 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("post_"):
         await handle_post_action(query, data)
     elif data.startswith("configure_schedule_"):
-        post_id = int(data.split('_')[2])
+        post_id = data.split('_')[2]
         await configure_schedule_menu(query, post_id)
     elif data.startswith("configure_channels_"):
-        post_id = int(data.split('_')[2])
+        post_id = data.split('_')[2]
         await configure_channels_menu(query, context, post_id)
     elif data.startswith("delete_post_"):
-        post_id = int(data.split('_')[2])
+        post_id = data.split('_')[2]
         await confirm_delete_post(query, post_id)
     elif data.startswith("confirm_delete_"):
-        post_id = int(data.split('_')[2])
+        post_id = data.split('_')[2]
         await delete_post(query, post_id)
     
     # Configuración de horarios
     elif data.startswith("set_time_"):
-        post_id = int(data.split('_')[2])
+        post_id = data.split('_')[2]
         await prompt_set_time(query, context, post_id)
     elif data.startswith("set_delete_"):
-        post_id = int(data.split('_')[2])
+        post_id = data.split('_')[2]
         await prompt_set_delete_hours(query, context, post_id)
     elif data.startswith("set_days_"):
-        post_id = int(data.split('_')[2])
+        post_id = data.split('_')[2]
         await configure_days_menu(query, context, post_id)
     elif data.startswith("toggle_day_"):
         parts = data.split('_')
-        post_id, day_num = int(parts[2]), int(parts[3])
+        post_id, day_num = parts[2], int(parts[3])
         await toggle_day(query, context, post_id, day_num)
     elif data.startswith("save_days_"):
-        post_id = int(data.split('_')[2])
+        post_id = data.split('_')[2]
         await save_days(query, context, post_id)
     
     # Nuevas funciones
     elif data.startswith("toggle_pin_"):
-        post_id = int(data.split('_')[2])
+        post_id = data.split('_')[2]
         await toggle_pin_message(query, context, post_id)
     elif data.startswith("toggle_forward_"):
-        post_id = int(data.split('_')[2])
+        post_id = data.split('_')[2]
         await toggle_forward_original(query, context, post_id)
     elif data.startswith("send_now_"):
-        post_id = int(data.split('_')[2])
+        post_id = data.split('_')[2]
         await send_post_manually(query, context, post_id)
     elif data.startswith("confirm_send_"):
-        post_id = int(data.split('_')[2])
+        post_id = data.split('_')[2]
         await confirm_manual_send(query, context, post_id)
     elif data.startswith("preview_"):
-        post_id = int(data.split('_')[1])
+        post_id = data.split('_')[1]
         await preview_post(query, context, post_id)
     elif data.startswith("send_preview_"):
-        post_id = int(data.split('_')[2])
+        post_id = data.split('_')[2]
         await send_preview_to_admin(query, context, post_id)
     
     # Gestión de canales
@@ -121,22 +121,20 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "list_channels":
         await show_channels_list(query)
     elif data.startswith("remove_channel_"):
-        channel_id = int(data.split('_')[2])
+        channel_id = data.split('_')[2]
         await remove_channel(query, channel_id)
     
     # Asignación de canales a posts
     elif data.startswith("toggle_channel_"):
         parts = data.split('_')
-        post_id, channel_id = int(parts[2]), parts[3]
+        post_id, channel_id = parts[2], parts[3]
         await toggle_channel_assignment(query, context, post_id, channel_id)
     elif data.startswith("save_assignments_"):
-        post_id = int(data.split('_')[2])
+        post_id = data.split('_')[2]
         await save_channel_assignments(query, context, post_id)
 
 async def list_posts(query):
-    session = get_session()
-    posts = session.query(Post).filter_by(is_active=True).all()
-    session.close()
+    posts = Post.find_active()
     
     if not posts:
         keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="back_main")]]
@@ -149,7 +147,7 @@ async def list_posts(query):
         keyboard.append([
             InlineKeyboardButton(
                 f"📄 {post.name} ({post.content_type.title()})",
-                callback_data=f"post_{post.id}"
+                callback_data=f"post_{str(post._id)}"
             )
         ])
     
@@ -163,19 +161,17 @@ async def list_posts(query):
     )
 
 async def handle_post_action(query, data):
-    post_id = int(data.split('_')[1])
-    session = get_session()
+    post_id = data.split('_')[1]
+    post = Post.find_by_id(post_id)
     
-    post = session.query(Post).filter_by(id=post_id).first()
     if not post:
-        await query.edit_message_text("❌ Post no encontrado.")
-        session.close()
+        keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="list_posts")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text("❌ Post no encontrado.", reply_markup=reply_markup)
         return
     
-    schedule = session.query(PostSchedule).filter_by(post_id=post_id).first()
-    assigned_channels = session.query(PostChannel).filter_by(post_id=post_id).count()
-    
-    session.close()
+    schedule = PostSchedule.find_by_post_id(post_id)
+    assigned_channels = PostChannel.count_by_post_id(post_id)
     
     # Información del horario
     schedule_info = "No configurado"
@@ -186,11 +182,11 @@ async def handle_post_action(query, data):
         schedule_info = f"{schedule.send_time} ({days_display}) - Eliminar: {schedule.delete_after_hours}h"
     
     keyboard = [
-        [InlineKeyboardButton("⏰ Configurar Horario", callback_data=f"configure_schedule_{post.id}")],
-        [InlineKeyboardButton("📺 Asignar Canales", callback_data=f"configure_channels_{post.id}")],
-        [InlineKeyboardButton("👀 Vista Previa", callback_data=f"preview_{post.id}"),
-         InlineKeyboardButton("📤 Enviar Ahora", callback_data=f"send_now_{post.id}")],
-        [InlineKeyboardButton("🗑️ Eliminar Post", callback_data=f"delete_post_{post.id}")],
+        [InlineKeyboardButton("⏰ Configurar Horario", callback_data=f"configure_schedule_{post_id}")],
+        [InlineKeyboardButton("📺 Asignar Canales", callback_data=f"configure_channels_{post_id}")],
+        [InlineKeyboardButton("👀 Vista Previa", callback_data=f"preview_{post_id}"),
+         InlineKeyboardButton("📤 Enviar Ahora", callback_data=f"send_now_{post_id}")],
+        [InlineKeyboardButton("🗑️ Eliminar Post", callback_data=f"delete_post_{post_id}")],
         [InlineKeyboardButton("🔙 Volver", callback_data="list_posts")]
     ]
     
@@ -210,6 +206,9 @@ async def handle_post_action(query, data):
 async def create_post_prompt(query, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['state'] = 'waiting_for_post'
     
+    keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="back_main")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
     await query.edit_message_text(
         "📤 **Para crear un post:**\n\n"
         "1. Ve al canal fuente\n"
@@ -220,6 +219,7 @@ async def create_post_prompt(query, context: ContextTypes.DEFAULT_TYPE):
         "• Audio, Documentos, GIFs\n"
         "• Stickers, Mensajes de voz\n\n"
         "⚠️ **Importante:** Usa 'Reenviar', no copiar",
+        reply_markup=reply_markup,
         parse_mode='Markdown'
     )
 
@@ -237,9 +237,8 @@ async def handle_post_creation(update: Update, context: ContextTypes.DEFAULT_TYP
     # Si es un mensaje reenviado, activar el estado de espera para contenido
     context.user_data['state'] = 'waiting_for_post'
     
-    session = get_session()
     try:
-        post_count = session.query(Post).filter_by(is_active=True).count()
+        post_count = Post.count_active()
 
         if post_count >= MAX_POSTS:
             await message.reply_text(f"❌ Máximo {MAX_POSTS} posts permitidos. Elimina uno existente primero.")
@@ -258,11 +257,11 @@ async def handle_post_creation(update: Update, context: ContextTypes.DEFAULT_TYP
 
         # Usar reply_to_message para acceder al mensaje original
         if message.reply_to_message:
-            source_channel = str(message.reply_to_message.chat.id)  # Accede al chat del mensaje original
-            source_message_id = message.reply_to_message.message_id  # ID del mensaje reenviado
+            source_channel = str(message.reply_to_message.chat.id)
+            source_message_id = message.reply_to_message.message_id
         else:
-            source_channel = str(message.chat.id)  # ID del chat actual
-            source_message_id = message.message_id  # ID del mensaje actual
+            source_channel = str(message.chat.id)
+            source_message_id = message.message_id
 
         # Crear post
         post_name = f"Post {post_count + 1}"
@@ -278,35 +277,35 @@ async def handle_post_creation(update: Update, context: ContextTypes.DEFAULT_TYP
             file_id=file_id
         )
 
-        session.add(post)
-        session.commit()
+        if not post.save():
+            await message.reply_text("❌ Error al crear el post.")
+            return
 
         # Crear horario por defecto
         schedule = PostSchedule(
-            post_id=post.id,
+            post_id=str(post._id),
             send_time="09:00",
             delete_after_hours=24,
             days_of_week="1,2,3,4,5,6,7",
             pin_message=False,
             forward_original=True
         )
-        session.add(schedule)
-        session.commit()
+        schedule.save()
 
         context.user_data.pop('state', None)
 
         # Crear botones de acción rápida
         keyboard = [
-            [InlineKeyboardButton("⚙️ Configurar", callback_data=f"post_{post.id}")],
-            [InlineKeyboardButton("📺 Asignar Canales", callback_data=f"configure_channels_{post.id}")],
-            [InlineKeyboardButton("📤 Enviar Ahora", callback_data=f"send_now_{post.id}")],
+            [InlineKeyboardButton("⚙️ Configurar", callback_data=f"post_{str(post._id)}")],
+            [InlineKeyboardButton("📺 Asignar Canales", callback_data=f"configure_channels_{str(post._id)}")],
+            [InlineKeyboardButton("📤 Enviar Ahora", callback_data=f"send_now_{str(post._id)}")],
             [InlineKeyboardButton("🏠 Menú Principal", callback_data="back_main")]
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         await message.reply_text(
             f"✅ **Post creado exitosamente!**\n\n"
-            f"**ID:** {post.id}\n"
+            f"**ID:** {str(post._id)}\n"
             f"**Nombre:** {post.name}\n"
             f"**Tipo:** {content_type.title()}\n"
             f"**Fuente:** `{source_channel}`\n\n"
@@ -316,11 +315,8 @@ async def handle_post_creation(update: Update, context: ContextTypes.DEFAULT_TYP
         )
 
     except Exception as e:
-        session.rollback()
         logger.error(f"Error creating post: {e}")
         await message.reply_text(f"❌ Error al crear el post: {str(e)}")
-    finally:
-        session.close()
 
 def extract_content_info(message):
     """Extrae información del contenido del mensaje"""
@@ -364,13 +360,13 @@ def extract_content_info(message):
 
 # --- CONFIGURACIÓN DE HORARIOS ---
 async def configure_schedule_menu(query, post_id):
-    session = get_session()
-    post = session.query(Post).filter_by(id=post_id).first()
-    schedule = session.query(PostSchedule).filter_by(post_id=post_id).first()
-    session.close()
+    post = Post.find_by_id(post_id)
+    schedule = PostSchedule.find_by_post_id(post_id)
     
     if not post or not schedule:
-        await query.edit_message_text("❌ Post o horario no encontrado.")
+        keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="list_posts")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text("❌ Post o horario no encontrado.", reply_markup=reply_markup)
         return
     
     days_map = {1: "Lun", 2: "Mar", 3: "Mié", 4: "Jue", 5: "Vie", 6: "Sáb", 7: "Dom"}
@@ -400,53 +396,57 @@ async def configure_schedule_menu(query, post_id):
     )
 
 async def toggle_pin_message(query, context: ContextTypes.DEFAULT_TYPE, post_id):
-    session = get_session()
     try:
-        schedule = session.query(PostSchedule).filter_by(post_id=post_id).first()
+        schedule = PostSchedule.find_by_post_id(post_id)
         if schedule:
             schedule.pin_message = not schedule.pin_message
-            session.commit()
+            schedule.save()
             
             status = "activado" if schedule.pin_message else "desactivado"
             await query.answer(f"✅ Fijar mensaje {status}")
             await configure_schedule_menu(query, post_id)
         else:
-            await query.edit_message_text("❌ Horario no encontrado.")
+            keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="list_posts")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text("❌ Horario no encontrado.", reply_markup=reply_markup)
     except Exception as e:
-        session.rollback()
         logger.error(f"Error toggling pin: {e}")
-        await query.edit_message_text(f"❌ Error: {str(e)}")
-    finally:
-        session.close()
+        keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="list_posts")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(f"❌ Error: {str(e)}", reply_markup=reply_markup)
 
 async def toggle_forward_original(query, context: ContextTypes.DEFAULT_TYPE, post_id):
-    session = get_session()
     try:
-        schedule = session.query(PostSchedule).filter_by(post_id=post_id).first()
+        schedule = PostSchedule.find_by_post_id(post_id)
         if schedule:
             schedule.forward_original = not schedule.forward_original
-            session.commit()
+            schedule.save()
             
             status = "activado" if schedule.forward_original else "desactivado"
             await query.answer(f"✅ Reenvío original {status}")
             await configure_schedule_menu(query, post_id)
         else:
-            await query.edit_message_text("❌ Horario no encontrado.")
+            keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="list_posts")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text("❌ Horario no encontrado.", reply_markup=reply_markup)
     except Exception as e:
-        session.rollback()
         logger.error(f"Error toggling forward: {e}")
-        await query.edit_message_text(f"❌ Error: {str(e)}")
-    finally:
-        session.close()
+        keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="list_posts")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(f"❌ Error: {str(e)}", reply_markup=reply_markup)
 
 async def prompt_set_time(query, context: ContextTypes.DEFAULT_TYPE, post_id):
     context.user_data['state'] = 'waiting_time'
     context.user_data['post_id'] = post_id
     
+    keyboard = [[InlineKeyboardButton("🔙 Cancelar", callback_data=f"configure_schedule_{post_id}")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
     await query.edit_message_text(
         "🕐 **Configurar Hora de Envío**\n\n"
         "Envía la hora en formato **HH:MM**\n"
         "Ejemplos: `09:30`, `14:00`, `20:15`",
+        reply_markup=reply_markup,
         parse_mode='Markdown'
     )
 
@@ -454,21 +454,25 @@ async def prompt_set_delete_hours(query, context: ContextTypes.DEFAULT_TYPE, pos
     context.user_data['state'] = 'waiting_delete_hours'
     context.user_data['post_id'] = post_id
     
+    keyboard = [[InlineKeyboardButton("🔙 Cancelar", callback_data=f"configure_schedule_{post_id}")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
     await query.edit_message_text(
         "⏰ **Horas para Eliminar**\n\n"
         "Envía el número de horas (1-48)\n"
         "Ejemplos: `1`, `6`, `24`\n\n"
         "Envía `0` para no eliminar automáticamente",
+        reply_markup=reply_markup,
         parse_mode='Markdown'
     )
 
 async def configure_days_menu(query, context: ContextTypes.DEFAULT_TYPE, post_id):
-    session = get_session()
-    schedule = session.query(PostSchedule).filter_by(post_id=post_id).first()
-    session.close()
+    schedule = PostSchedule.find_by_post_id(post_id)
     
     if not schedule:
-        await query.edit_message_text("❌ Horario no encontrado.")
+        keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="list_posts")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text("❌ Horario no encontrado.", reply_markup=reply_markup)
         return
     
     current_days = [int(d) for d in schedule.days_of_week.split(',')]
@@ -525,12 +529,11 @@ async def save_days(query, context: ContextTypes.DEFAULT_TYPE, post_id):
         await query.answer("❌ Selecciona al menos un día", show_alert=True)
         return
     
-    session = get_session()
     try:
-        schedule = session.query(PostSchedule).filter_by(post_id=post_id).first()
+        schedule = PostSchedule.find_by_post_id(post_id)
         if schedule:
             schedule.days_of_week = ','.join(map(str, sorted(selected_days)))
-            session.commit()
+            schedule.save()
             
             # Reprogramar en el scheduler
             from scheduler import reschedule_post_job
@@ -542,30 +545,34 @@ async def save_days(query, context: ContextTypes.DEFAULT_TYPE, post_id):
             
             await configure_schedule_menu(query, post_id)
         else:
-            await query.edit_message_text("❌ Horario no encontrado.")
+            keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="list_posts")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text("❌ Horario no encontrado.", reply_markup=reply_markup)
     except Exception as e:
-        session.rollback()
         logger.error(f"Error saving days: {e}")
-        await query.edit_message_text(f"❌ Error al guardar: {str(e)}")
-    finally:
-        session.close()
+        keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="list_posts")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(f"❌ Error al guardar: {str(e)}", reply_markup=reply_markup)
 
 # --- ENVÍO MANUAL Y VISTA PREVIA ---
 async def send_post_manually(query, context: ContextTypes.DEFAULT_TYPE, post_id):
     """Enviar post manualmente a todos los canales asignados"""
-    session = get_session()
     try:
-        post = session.query(Post).filter_by(id=post_id, is_active=True).first()
+        post = Post.find_by_id(post_id)
         if not post:
-            await query.edit_message_text("❌ Post no encontrado.")
+            keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="list_posts")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text("❌ Post no encontrado.", reply_markup=reply_markup)
             return
         
-        post_channels = session.query(PostChannel).filter_by(post_id=post_id).all()
+        post_channels = PostChannel.find_by_post_id(post_id)
         if not post_channels:
-            await query.edit_message_text("❌ No hay canales asignados a este post.")
+            keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data=f"post_{post_id}")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text("❌ No hay canales asignados a este post.", reply_markup=reply_markup)
             return
         
-        schedule = session.query(PostSchedule).filter_by(post_id=post_id).first()
+        schedule = PostSchedule.find_by_post_id(post_id)
         
         # Mensaje de confirmación
         keyboard = [
@@ -584,21 +591,25 @@ async def send_post_manually(query, context: ContextTypes.DEFAULT_TYPE, post_id)
             parse_mode='Markdown'
         )
         
-    finally:
-        session.close()
+    except Exception as e:
+        logger.error(f"Error in send_post_manually: {e}")
+        keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="list_posts")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(f"❌ Error: {str(e)}", reply_markup=reply_markup)
 
 async def confirm_manual_send(query, context: ContextTypes.DEFAULT_TYPE, post_id):
     """Confirmar y ejecutar envío manual"""
     await query.edit_message_text("📤 Enviando post...")
     
-    session = get_session()
     try:
-        post = session.query(Post).filter_by(id=post_id, is_active=True).first()
-        post_channels = session.query(PostChannel).filter_by(post_id=post_id).all()
-        schedule = session.query(PostSchedule).filter_by(post_id=post_id).first()
+        post = Post.find_by_id(post_id)
+        post_channels = PostChannel.find_by_post_id(post_id)
+        schedule = PostSchedule.find_by_post_id(post_id)
         
         if not post or not post_channels:
-            await query.edit_message_text("❌ Error: Post o canales no encontrados.")
+            keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="list_posts")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text("❌ Error: Post o canales no encontrados.", reply_markup=reply_markup)
             return
         
         sent_count = 0
@@ -667,17 +678,18 @@ async def confirm_manual_send(query, context: ContextTypes.DEFAULT_TYPE, post_id
         
     except Exception as e:
         logger.error(f"Error in manual send: {e}")
-        await query.edit_message_text(f"❌ Error durante el envío: {str(e)}")
-    finally:
-        session.close()
+        keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="list_posts")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(f"❌ Error durante el envío: {str(e)}", reply_markup=reply_markup)
 
 async def preview_post(query, context: ContextTypes.DEFAULT_TYPE, post_id):
     """Mostrar vista previa del post"""
-    session = get_session()
     try:
-        post = session.query(Post).filter_by(id=post_id).first()
+        post = Post.find_by_id(post_id)
         if not post:
-            await query.edit_message_text("❌ Post no encontrado.")
+            keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="list_posts")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text("❌ Post no encontrado.", reply_markup=reply_markup)
             return
         
         # Enviar vista previa al admin
@@ -703,14 +715,16 @@ async def preview_post(query, context: ContextTypes.DEFAULT_TYPE, post_id):
             parse_mode='Markdown'
         )
         
-    finally:
-        session.close()
+    except Exception as e:
+        logger.error(f"Error in preview_post: {e}")
+        keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="list_posts")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(f"❌ Error: {str(e)}", reply_markup=reply_markup)
 
 async def send_preview_to_admin(query, context: ContextTypes.DEFAULT_TYPE, post_id):
     """Enviar vista previa real del contenido"""
-    session = get_session()
     try:
-        post = session.query(Post).filter_by(id=post_id).first()
+        post = Post.find_by_id(post_id)
         if not post:
             await query.answer("❌ Post no encontrado")
             return
@@ -724,8 +738,9 @@ async def send_preview_to_admin(query, context: ContextTypes.DEFAULT_TYPE, post_
         except Exception as e:
             await query.answer(f"❌ Error: {str(e)}")
             
-    finally:
-        session.close()
+    except Exception as e:
+        logger.error(f"Error in send_preview_to_admin: {e}")
+        await query.answer(f"❌ Error: {str(e)}")
 
 async def send_content_to_channel(bot: Bot, channel_id: str, post: Post, schedule: PostSchedule = None):
     """Envía contenido a un canal específico"""
@@ -835,6 +850,9 @@ async def verify_bot_permissions(bot: Bot, channel_id: str):
 async def prompt_add_channel(query, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['state'] = 'waiting_channel'
     
+    keyboard = [[InlineKeyboardButton("🔙 Cancelar", callback_data="manage_channels")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
     await query.edit_message_text(
         "➕ **Añadir Canal**\n\n"
         "Envía el canal en uno de estos formatos:\n"
@@ -842,13 +860,12 @@ async def prompt_add_channel(query, context: ContextTypes.DEFAULT_TYPE):
         "• `https://t.me/nombre_canal`\n"
         "• `-1001234567890` (ID)\n\n"
         "⚠️ El bot debe ser admin en el canal",
+        reply_markup=reply_markup,
         parse_mode='Markdown'
     )
 
 async def show_channels_list(query):
-    session = get_session()
-    channels = session.query(Channel).all()
-    session.close()
+    channels = Channel.find_all()
     
     if not channels:
         keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="manage_channels")]]
@@ -867,9 +884,7 @@ async def show_channels_list(query):
     await query.edit_message_text(message, reply_markup=reply_markup, parse_mode='Markdown')
 
 async def show_remove_channel_menu(query):
-    session = get_session()
-    channels = session.query(Channel).all()
-    session.close()
+    channels = Channel.find_all()
     
     if not channels:
         keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="manage_channels")]]
@@ -881,7 +896,7 @@ async def show_remove_channel_menu(query):
     for channel in channels:
         name = channel.channel_name or channel.channel_username or channel.channel_id
         keyboard.append([
-            InlineKeyboardButton(f"🗑️ {name}", callback_data=f"remove_channel_{channel.id}")
+            InlineKeyboardButton(f"🗑️ {name}", callback_data=f"remove_channel_{str(channel._id)}")
         ])
     
     keyboard.append([InlineKeyboardButton("🔙 Volver", callback_data="manage_channels")])
@@ -894,31 +909,34 @@ async def show_remove_channel_menu(query):
     )
 
 async def remove_channel(query, channel_id):
-    session = get_session()
     try:
-        channel = session.query(Channel).filter_by(id=channel_id).first()
-        if channel:
-            # Eliminar asignaciones
-            session.query(PostChannel).filter_by(channel_id=channel.channel_id).delete()
-            session.delete(channel)
-            session.commit()
-            
-            await query.answer("✅ Canal eliminado correctamente")
-            await manage_channels_menu(query)
+        # Buscar canal por ObjectId
+        from bson import ObjectId
+        from database import db
+        
+        channel_doc = db.channels.find_one({'_id': ObjectId(channel_id)})
+        if channel_doc:
+            channel = Channel.from_dict(channel_doc)
+            if channel.delete():
+                await query.answer("✅ Canal eliminado correctamente")
+                await manage_channels_menu(query)
+            else:
+                keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="manage_channels")]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await query.edit_message_text("❌ Error al eliminar el canal.", reply_markup=reply_markup)
         else:
-            await query.edit_message_text("❌ Canal no encontrado.")
+            keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="manage_channels")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text("❌ Canal no encontrado.", reply_markup=reply_markup)
     except Exception as e:
-        session.rollback()
         logger.error(f"Error removing channel: {e}")
-        await query.edit_message_text(f"❌ Error: {str(e)}")
-    finally:
-        session.close()
+        keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="manage_channels")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(f"❌ Error: {str(e)}", reply_markup=reply_markup)
 
 # --- ASIGNACIÓN DE CANALES A POSTS ---
 async def configure_channels_menu(query, context: ContextTypes.DEFAULT_TYPE, post_id):
-    session = get_session()
-    
-    all_channels = session.query(Channel).all()
+    all_channels = Channel.find_all()
     if not all_channels:
         keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data=f"post_{post_id}")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
@@ -926,14 +944,11 @@ async def configure_channels_menu(query, context: ContextTypes.DEFAULT_TYPE, pos
             "❌ No hay canales disponibles.\nPrimero añade canales.",
             reply_markup=reply_markup
         )
-        session.close()
         return
     
     # Obtener canales asignados actualmente
-    assigned = session.query(PostChannel).filter_by(post_id=post_id).all()
+    assigned = PostChannel.find_by_post_id(post_id)
     assigned_ids = [pc.channel_id for pc in assigned]
-    
-    session.close()
     
     # Guardar selección actual
     context.user_data['channel_assignments'] = assigned_ids.copy()
@@ -942,10 +957,7 @@ async def configure_channels_menu(query, context: ContextTypes.DEFAULT_TYPE, pos
     await update_channels_menu(query, context, post_id)
 
 async def update_channels_menu(query, context: ContextTypes.DEFAULT_TYPE, post_id):
-    session = get_session()
-    all_channels = session.query(Channel).all()
-    session.close()
-    
+    all_channels = Channel.find_all()
     selected_channels = context.user_data.get('channel_assignments', [])
     
     keyboard = []
@@ -988,17 +1000,14 @@ async def toggle_channel_assignment(query, context: ContextTypes.DEFAULT_TYPE, p
 async def save_channel_assignments(query, context: ContextTypes.DEFAULT_TYPE, post_id):
     selected_channels = context.user_data.get('channel_assignments', [])
     
-    session = get_session()
     try:
         # Eliminar asignaciones existentes
-        session.query(PostChannel).filter_by(post_id=post_id).delete()
+        PostChannel.delete_by_post_id(post_id)
         
         # Añadir nuevas asignaciones
         for channel_id in selected_channels:
             post_channel = PostChannel(post_id=post_id, channel_id=channel_id)
-            session.add(post_channel)
-        
-        session.commit()
+            post_channel.save()
         
         context.user_data.pop('channel_assignments', None)
         context.user_data.pop('assigning_post_id', None)
@@ -1007,20 +1016,19 @@ async def save_channel_assignments(query, context: ContextTypes.DEFAULT_TYPE, po
         await handle_post_action(query, f"post_{post_id}")
         
     except Exception as e:
-        session.rollback()
         logger.error(f"Error saving assignments: {e}")
-        await query.edit_message_text(f"❌ Error: {str(e)}")
-    finally:
-        session.close()
+        keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="list_posts")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(f"❌ Error: {str(e)}", reply_markup=reply_markup)
 
 # --- ELIMINAR POSTS ---
 async def confirm_delete_post(query, post_id):
-    session = get_session()
-    post = session.query(Post).filter_by(id=post_id).first()
-    session.close()
+    post = Post.find_by_id(post_id)
     
     if not post:
-        await query.edit_message_text("❌ Post no encontrado.")
+        keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="list_posts")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text("❌ Post no encontrado.", reply_markup=reply_markup)
         return
     
     keyboard = [
@@ -1039,41 +1047,35 @@ async def confirm_delete_post(query, post_id):
     )
 
 async def delete_post(query, post_id):
-    session = get_session()
     try:
-        post = session.query(Post).filter_by(id=post_id).first()
+        post = Post.find_by_id(post_id)
         if post:
-            # Eliminar registros relacionados
-            session.query(PostChannel).filter_by(post_id=post_id).delete()
-            session.query(PostSchedule).filter_by(post_id=post_id).delete()
-            session.query(ScheduledJob).filter_by(post_id=post_id).delete()
-            session.delete(post)
-            session.commit()
-            
-            # Eliminar trabajos del scheduler
-            from scheduler import remove_post_jobs
-            remove_post_jobs(post_id)
-            
-            await query.answer("✅ Post eliminado")
-            await list_posts(query)
+            if post.delete():
+                # Eliminar trabajos del scheduler
+                from scheduler import remove_post_jobs
+                remove_post_jobs(post_id)
+                
+                await query.answer("✅ Post eliminado")
+                await list_posts(query)
+            else:
+                keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="list_posts")]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                await query.edit_message_text("❌ Error al eliminar el post.", reply_markup=reply_markup)
         else:
-            await query.edit_message_text("❌ Post no encontrado.")
+            keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="list_posts")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await query.edit_message_text("❌ Post no encontrado.", reply_markup=reply_markup)
     except Exception as e:
-        session.rollback()
         logger.error(f"Error deleting post: {e}")
-        await query.edit_message_text(f"❌ Error: {str(e)}")
-    finally:
-        session.close()
+        keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="list_posts")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text(f"❌ Error: {str(e)}", reply_markup=reply_markup)
 
 # --- ESTADÍSTICAS ---
 async def show_statistics(query):
-    session = get_session()
-    
-    total_posts = session.query(Post).filter_by(is_active=True).count()
-    total_channels = session.query(Channel).count()
-    total_schedules = session.query(PostSchedule).filter_by(is_enabled=True).count()
-    
-    session.close()
+    total_posts = Post.count_active()
+    total_channels = Channel.count_all()
+    total_schedules = PostSchedule.count_enabled()
     
     keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="back_main")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -1106,18 +1108,17 @@ async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_channel_input(update, context, text)
 
 async def handle_time_input(update, context, text):
-    if not re.match(r'^([01]?[0-9]|2[0-3]):[0-5][0-9]$', text):
+    if not re.match(r'^([01]?[0-9]|2[0-3]):[0-5][0-9]$$', text):
         await update.message.reply_text("❌ Formato inválido. Usa HH:MM (ej: 09:30)")
         return
     
     post_id = context.user_data.get('post_id')
-    session = get_session()
     
     try:
-        schedule = session.query(PostSchedule).filter_by(post_id=post_id).first()
+        schedule = PostSchedule.find_by_post_id(post_id)
         if schedule:
             schedule.send_time = text
-            session.commit()
+            schedule.save()
             
             from scheduler import reschedule_post_job
             reschedule_post_job(context.bot, post_id)
@@ -1128,11 +1129,8 @@ async def handle_time_input(update, context, text):
         else:
             await update.message.reply_text("❌ Horario no encontrado.")
     except Exception as e:
-        session.rollback()
         logger.error(f"Error setting time: {e}")
         await update.message.reply_text(f"❌ Error: {str(e)}")
-    finally:
-        session.close()
 
 async def handle_delete_hours_input(update, context, text):
     try:
@@ -1145,13 +1143,12 @@ async def handle_delete_hours_input(update, context, text):
         return
     
     post_id = context.user_data.get('post_id')
-    session = get_session()
     
     try:
-        schedule = session.query(PostSchedule).filter_by(post_id=post_id).first()
+        schedule = PostSchedule.find_by_post_id(post_id)
         if schedule:
             schedule.delete_after_hours = hours
-            session.commit()
+            schedule.save()
             
             await update.message.reply_text(f"✅ Configurado: eliminar después de {hours} horas")
             context.user_data.pop('state', None)
@@ -1159,11 +1156,8 @@ async def handle_delete_hours_input(update, context, text):
         else:
             await update.message.reply_text("❌ Horario no encontrado.")
     except Exception as e:
-        session.rollback()
         logger.error(f"Error setting delete hours: {e}")
         await update.message.reply_text(f"❌ Error: {str(e)}")
-    finally:
-        session.close()
 
 async def handle_channel_input(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
     channel_info = extract_channel_info(text)
@@ -1180,10 +1174,9 @@ async def handle_channel_input(update: Update, context: ContextTypes.DEFAULT_TYP
     # Mensaje de verificación
     verification_msg = await update.message.reply_text("🔍 Verificando canal y permisos...")
 
-    session = get_session()
     try:
         # Verificar si ya existe
-        existing = session.query(Channel).filter_by(channel_id=channel_info).first()
+        existing = Channel.find_by_channel_id(channel_info)
         if existing:
             await verification_msg.edit_text("❌ Este canal ya está registrado")
             return
@@ -1238,8 +1231,9 @@ async def handle_channel_input(update: Update, context: ContextTypes.DEFAULT_TYP
             channel_username=channel_username
         )
 
-        session.add(channel)
-        session.commit()
+        if not channel.save():
+            await verification_msg.edit_text("❌ Error al guardar el canal")
+            return
 
         # Enviar mensaje de confirmación al canal
         confirmation_message = await context.bot.send_message(
@@ -1249,7 +1243,10 @@ async def handle_channel_input(update: Update, context: ContextTypes.DEFAULT_TYP
 
         # Programar eliminación del mensaje de confirmación en 30 segundos
         await asyncio.sleep(30)
-        await context.bot.delete_message(chat_id=channel_id_final, message_id=confirmation_message.message_id)
+        try:
+            await context.bot.delete_message(chat_id=channel_id_final, message_id=confirmation_message.message_id)
+        except:
+            pass
 
         context.user_data.pop('state', None)
 
@@ -1263,11 +1260,8 @@ async def handle_channel_input(update: Update, context: ContextTypes.DEFAULT_TYP
         )
 
     except Exception as e:
-        session.rollback()
         logger.error(f"Error adding channel: {e}")
         await verification_msg.edit_text(f"❌ Error: {str(e)}")
-    finally:
-        session.close()
 
 def extract_channel_info(text):
     """Extrae información del canal del texto"""
