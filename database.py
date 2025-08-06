@@ -28,6 +28,8 @@ class PostSchedule(Base):
     delete_after_hours = Column(Integer, default=24)
     days_of_week = Column(String(20), default='1,2,3,4,5,6,7')  # 1=Monday, 7=Sunday
     is_enabled = Column(Boolean, default=True)
+    pin_message = Column(Boolean, default=False)  # Nueva: Fijar mensaje
+    forward_original = Column(Boolean, default=True)  # Nueva: Reenviar original
 
 class Channel(Base):
     __tablename__ = 'channels'
