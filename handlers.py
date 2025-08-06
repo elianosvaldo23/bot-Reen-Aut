@@ -258,16 +258,12 @@ async def handle_post_creation(update: Update, context: ContextTypes.DEFAULT_TYP
         source_channel = None
         source_message_id = None
         
-        if message.forward:  # Cambiado para usar message.forward
-            if hasattr(message.forward, 'chat'):
-                source_channel = str(message.forward.chat.id)
-                source_message_id = message.forward.message_id
-            elif hasattr(message.forward, 'sender_user'):
-                source_channel = str(message.forward.sender_user.id)
-                source_message_id = message.message_id
+        if message.forward:  # Asegúrate de que se está usando el atributo correcto
+            source_channel = str(message.forward.chat.id)  # Asegúrate de extraerlo correctamente
+            source_message_id = message.forward.message_id  # Obtén el ID del mensaje reenviado
         else:
-            source_channel = str(message.chat.id)
-            source_message_id = message.message_id
+            source_channel = str(message.chat.id)  # Si no es un reenvío, usa el ID del chat actual
+            source_message_id = message.message_id  # ID del mensaje actual
         
         # Crear post
         post_name = f"Post {post_count + 1}"
@@ -276,8 +272,8 @@ async def handle_post_creation(update: Update, context: ContextTypes.DEFAULT_TYP
         
         post = Post(
             name=post_name,
-            source_channel=source_channel,
-            source_message_id=source_message_id,
+            source_channel=source_channel,  # Asegúrate de que se esté asignando correctamente
+            source_message_id=source_message_id,  # Asegúrate de que se esté asignando correctamente
             content_type=content_type,
             content_text=text or "",
             file_id=file_id
