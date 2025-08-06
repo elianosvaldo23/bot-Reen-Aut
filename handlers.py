@@ -258,11 +258,11 @@ async def handle_post_creation(update: Update, context: ContextTypes.DEFAULT_TYP
         source_channel = None
         source_message_id = None
         
-        if message.forward:  # Asegúrate de que se está usando el atributo correcto
-            source_channel = str(message.forward.chat.id)  # El canal del mensaje original
+        if message.forward:  # Verificar si hay un mensaje reenvíado
+            source_channel = str(message.forward.chat.id)  # Acceder correctamente al chat del mensaje reenviado
             source_message_id = message.forward.message_id  # ID del mensaje reenviado
         else:
-            source_channel = str(message.chat.id)  # ID del chat actual
+            source_channel = str(message.chat.id)  # Si no es un reenvío, usar el ID del chat actual
             source_message_id = message.message_id  # ID del mensaje actual
         
         # Crear post
