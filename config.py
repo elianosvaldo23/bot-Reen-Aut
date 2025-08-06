@@ -10,7 +10,8 @@ ADMIN_ID = int(os.getenv('ADMIN_ID', '1742433244'))
 MONGODB_URL = os.getenv('MONGODB_URL', 'mongodb+srv://zoobot:zoobot@zoolbot.6avd6qf.mongodb.net/zoolbot?retryWrites=true&w=majority&appName=Zoolbot')
 DATABASE_NAME = os.getenv('DATABASE_NAME', 'zoolbot')
 
-TIMEZONE = os.getenv('TIMEZONE', 'UTC')
+# Timezone Configuration
+TIMEZONE = 'America/Havana'  # Cuba timezone
 
 MAX_POSTS = 15
 MAX_CHANNELS_PER_POST = 90
