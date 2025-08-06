@@ -230,12 +230,12 @@ async def handle_post_creation(update: Update, context: ContextTypes.DEFAULT_TYP
     message = update.message
     
     # Verificar si el mensaje es un reenvío
-    if not message.forward and context.user_data.get('state') != 'waiting_for_post':
+    if not message.forward:
+        await message.reply_text("❌ Este mensaje no es un reenvío. Por favor, reenvía un mensaje.")
         return
 
     # Si es un mensaje reenviado, activar el estado de espera para contenido
-    if message.forward and context.user_data.get('state') != 'waiting_for_post':
-        context.user_data['state'] = 'waiting_for_post'
+    context.user_data['state'] = 'waiting_for_post'
     
     session = get_session()
     try:
@@ -243,7 +243,6 @@ async def handle_post_creation(update: Update, context: ContextTypes.DEFAULT_TYP
         
         if post_count >= MAX_POSTS:
             await message.reply_text(f"❌ Máximo {MAX_POSTS} posts permitidos. Elimina uno existente primero.")
-            context.user_data.pop('state', None)
             return
         
         # Detectar tipo de contenido
@@ -251,19 +250,11 @@ async def handle_post_creation(update: Update, context: ContextTypes.DEFAULT_TYP
         
         if not content_type:
             await message.reply_text("❌ Tipo de contenido no soportado.")
-            context.user_data.pop('state', None)
             return
         
         # Obtener información de la fuente
-        source_channel = None
-        source_message_id = None
-        
-        if message.forward:  # Verificar si hay un mensaje reenvíado
-            source_channel = str(message.forward.chat.id)  # Acceder correctamente al chat del mensaje reenviado
-            source_message_id = message.forward.message_id  # ID del mensaje reenviado
-        else:
-            source_channel = str(message.chat.id)  # Si no es un reenvío, usar el ID del chat actual
-            source_message_id = message.message_id  # ID del mensaje actual
+        source_channel = str(message.forward.chat.id)  # Accede al chat del mensaje original
+        source_message_id = message.forward.message_id  # ID del mensaje reenviado
         
         # Crear post
         post_name = f"Post {post_count + 1}"
@@ -272,8 +263,8 @@ async def handle_post_creation(update: Update, context: ContextTypes.DEFAULT_TYP
         
         post = Post(
             name=post_name,
-            source_channel=source_channel,  # Asegúrate de que se esté asignando correctamente
-            source_message_id=source_message_id,  # Asegúrate de que se esté asignando correctamente
+            source_channel=source_channel,
+            source_message_id=source_message_id,
             content_type=content_type,
             content_text=text or "",
             file_id=file_id
@@ -293,8 +284,6 @@ async def handle_post_creation(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         session.add(schedule)
         session.commit()
-        
-        context.user_data.pop('state', None)
         
         # Crear botones de acción rápida
         keyboard = [
@@ -320,7 +309,6 @@ async def handle_post_creation(update: Update, context: ContextTypes.DEFAULT_TYP
         session.rollback()
         logger.error(f"Error creating post: {e}")
         await message.reply_text(f"❌ Error al crear el post: {str(e)}")
-        context.user_data.pop('state', None)
     finally:
         session.close()
 
