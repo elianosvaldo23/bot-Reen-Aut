@@ -229,14 +229,14 @@ async def handle_post_creation(update: Update, context: ContextTypes.DEFAULT_TYP
 
     message = update.message
 
-    # Verificar si el mensaje es un reenvío
-    if not message.forward:
+    # Verificar si es un mensaje reenviado
+    if not message.reply_to_message and context.user_data.get('state') != 'waiting_for_post':
         await message.reply_text("❌ Este mensaje no es un reenvío. Por favor, reenvía un mensaje.")
         return
 
     # Si es un mensaje reenviado, activar el estado de espera para contenido
     context.user_data['state'] = 'waiting_for_post'
-
+    
     session = get_session()
     try:
         post_count = session.query(Post).filter_by(is_active=True).count()
@@ -251,20 +251,15 @@ async def handle_post_creation(update: Update, context: ContextTypes.DEFAULT_TYP
         if not content_type:
             await message.reply_text("❌ Tipo de contenido no soportado.")
             return
-
+        
         # Obtener información de la fuente
         source_channel = None
         source_message_id = None
 
-        # Comprobamos si el mensaje es un reenvío
-        if message.forward:
-            # Verificar si forward es un objeto válido
-            if hasattr(message.forward, 'chat') and hasattr(message.forward, 'message_id'):
-                source_channel = str(message.forward.chat.id)  # Accede al chat del mensaje original
-                source_message_id = message.forward.message_id  # ID del mensaje reenviado
-            else:
-                await message.reply_text("❌ No se puede acceder a la información del mensaje reenviado.")
-                return
+        # Usar reply_to_message para acceder al mensaje original
+        if message.reply_to_message:
+            source_channel = str(message.reply_to_message.chat.id)  # Accede al chat del mensaje original
+            source_message_id = message.reply_to_message.message_id  # ID del mensaje reenviado
         else:
             source_channel = str(message.chat.id)  # ID del chat actual
             source_message_id = message.message_id  # ID del mensaje actual
