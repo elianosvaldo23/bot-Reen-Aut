@@ -74,8 +74,8 @@ async def send_post_to_channels(bot: Bot, post_id: int):
             try:
                 message = None
                 
-                # Intentar reenviar mensaje original
-                if post.source_channel and post.source_message_id:
+                # Intentar reenviar mensaje original si está configurado
+                if schedule.forward_original and post.source_channel and post.source_message_id:
                     try:
                         message = await bot.forward_message(
                             chat_id=channel_id,
@@ -90,17 +90,29 @@ async def send_post_to_channels(bot: Bot, post_id: int):
                 if not message:
                     message = await send_content_by_type(bot, channel_id, post)
                 
-                if message and schedule.delete_after_hours > 0:
+                if message:
+                    # Fijar mensaje si está configurado
+                    if schedule.pin_message:
+                        try:
+                            await bot.pin_chat_message(
+                                chat_id=channel_id,
+                                message_id=message.message_id,
+                                disable_notification=True
+                            )
+                        except Exception as pin_error:
+                            logger.warning(f"No se pudo fijar mensaje: {pin_error}")
+                    
                     # Programar eliminación
-                    delete_time = datetime.utcnow() + timedelta(hours=schedule.delete_after_hours)
-                    scheduler.add_job(
-                        delete_message,
-                        trigger='date',
-                        run_date=delete_time,
-                        args=[bot, channel_id, message.message_id],
-                        id=f"delete_{post.id}_{channel_id}_{message.message_id}",
-                        replace_existing=True
-                    )
+                    if schedule.delete_after_hours > 0:
+                        delete_time = datetime.utcnow() + timedelta(hours=schedule.delete_after_hours)
+                        scheduler.add_job(
+                            delete_message,
+                            trigger='date',
+                            run_date=delete_time,
+                            args=[bot, channel_id, message.message_id],
+                            id=f"delete_{post.id}_{channel_id}_{message.message_id}",
+                            replace_existing=True
+                        )
                 
                 logger.info(f"Enviado post {post_id} a canal {channel_id}")
                 
@@ -170,6 +182,18 @@ async def delete_message(bot: Bot, channel_id: str, message_id: int):
     except Exception as e:
         logger.error(f"Error eliminando mensaje {message_id}: {e}")
 
+def schedule_message_deletion(bot: Bot, channel_id: str, message_id: int, hours: int):
+    """Programar eliminación de mensaje específico"""
+    delete_time = datetime.utcnow() + timedelta(hours=hours)
+    scheduler.add_job(
+        delete_message,
+        trigger='date',
+        run_date=delete_time,
+        args=[bot, channel_id, message_id],
+        id=f"delete_manual_{channel_id}_{message_id}",
+        replace_existing=True
+    )
+
 def reschedule_post_job(bot: Bot, post_id: int):
     session = get_session()
     try:
@@ -192,132 +216,4 @@ def stop_scheduler():
     if scheduler:
         scheduler.shutdown()
         logger.info("Scheduler detenido")
-    session.close()
-
-def schedule_post(bot, post, schedule):
-    days = [int(d) for d in schedule.days_of_week.split(',')]
-    hour, minute = map(int, schedule.send_time.split(':'))
     
-    # Schedule sending
-    job = scheduler.add_job(
-        send_post_to_channels,
-        trigger=CronTrigger(
-            day_of_week=','.join(str(d-1) for d in days),
-            hour=hour,
-            minute=minute
-        ),
-        args=[bot, post.id],
-        id=f"send_{post.id}"
-    )
-    
-    logger.info(f"Scheduled post {post.id} for {schedule.send_time} on days {days}")
-
-async def send_post_to_channels(bot: Bot, post_id: int):
-    session = get_session()
-    
-    post = session.query(Post).filter_by(id=post_id, is_active=True).first()
-    if not post:
-        session.close()
-        return
-    
-    post_channels = session.query(PostChannel).filter_by(post_id=post_id).all()
-    channels = [pc.channel_id for pc in post_channels]
-    
-    if not channels:
-        logger.warning(f"No channels assigned for post {post_id}")
-        session.close()
-        return
-    
-    schedule = session.query(PostSchedule).filter_by(post_id=post_id, is_enabled=True).first()
-    if not schedule:
-        session.close()
-        return
-    
-    sent_messages = []
-    
-    for channel_id in channels:
-        try:
-            if post.content_type == 'text':
-                message = await bot.send_message(
-                    chat_id=channel_id,
-                    text=post.content_text
-                )
-            elif post.content_type == 'photo':
-                message = await bot.send_photo(
-                    chat_id=channel_id,
-                    photo=post.file_id,
-                    caption=post.content_text
-                )
-            elif post.content_type == 'video':
-                message = await bot.send_video(
-                    chat_id=channel_id,
-                    video=post.file_id,
-                    caption=post.content_text
-                )
-            elif post.content_type == 'audio':
-                message = await bot.send_audio(
-                    chat_id=channel_id,
-                    audio=post.file_id,
-                    caption=post.content_text
-                )
-            elif post.content_type == 'document':
-                message = await bot.send_document(
-                    chat_id=channel_id,
-                    document=post.file_id,
-                    caption=post.content_text
-                )
-            
-            sent_messages.append({
-                'channel_id': channel_id,
-                'message_id': message.message_id
-            })
-            
-            # Schedule deletion
-            delete_time = datetime.utcnow() + timedelta(hours=schedule.delete_after_hours)
-            
-            job = scheduler.add_job(
-                delete_post_from_channel,
-                trigger='date',
-                run_date=delete_time,
-                args=[bot, channel_id, message.message_id],
-                id=f"delete_{post.id}_{channel_id}_{message.message_id}"
-            )
-            
-            # Save scheduled job
-            scheduled_job = ScheduledJob(
-                post_id=post_id,
-                job_type='send',
-                scheduled_time=datetime.utcnow(),
-                channel_id=channel_id,
-                message_id=message.message_id
-            )
-            session.add(scheduled_job)
-            
-            logger.info(f"Sent post {post_id} to channel {channel_id}")
-            
-        except Exception as e:
-            logger.error(f"Error sending post {post_id} to channel {channel_id}: {e}")
-    
-    session.commit()
-    session.close()
-
-async def delete_post_from_channel(bot: Bot, channel_id: str, message_id: int):
-    try:
-        await bot.delete_message(chat_id=channel_id, message_id=message_id)
-        logger.info(f"Deleted message {message_id} from channel {channel_id}")
-    except Exception as e:
-        logger.error(f"Error deleting message {message_id} from channel {channel_id}: {e}")
-
-async def check_missed_posts(bot: Bot):
-    """Check for posts that should have been sent but weren't"""
-    session = get_session()
-    
-    # This is a simple check - in production you might want more sophisticated logic
-    logger.info("Checking for missed posts...")
-    
-    session.close()
-
-def stop_scheduler():
-    if scheduler:
-        scheduler.shutdown()
-
