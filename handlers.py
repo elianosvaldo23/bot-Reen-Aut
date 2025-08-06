@@ -4,6 +4,7 @@ from database import get_session, Post, PostSchedule, Channel, PostChannel, Sche
 from config import ADMIN_ID, MAX_POSTS, MAX_CHANNELS_PER_POST
 import re
 import logging
+import asyncio
 
 logger = logging.getLogger(__name__)
 
@@ -229,11 +230,11 @@ async def handle_post_creation(update: Update, context: ContextTypes.DEFAULT_TYP
     message = update.message
     
     # Verificar si es un mensaje reenviado
-    if not message.is_forward and context.user_data.get('state') != 'waiting_for_post':
+    if not message.forward and context.user_data.get('state') != 'waiting_for_post':
         return
 
     # Si es un mensaje reenviado, activar el estado de espera para contenido
-    if message.is_forward and context.user_data.get('state') != 'waiting_for_post':
+    if message.forward and context.user_data.get('state') != 'waiting_for_post':
         context.user_data['state'] = 'waiting_for_post'
     
     session = get_session()
@@ -1172,7 +1173,7 @@ async def handle_delete_hours_input(update, context, text):
 
 async def handle_channel_input(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
     channel_info = extract_channel_info(text)
-    
+
     if not channel_info:
         await update.message.reply_text(
             "❌ Formato inválido. Usa:\n"
@@ -1181,10 +1182,10 @@ async def handle_channel_input(update: Update, context: ContextTypes.DEFAULT_TYP
             "• -1001234567890"
         )
         return
-    
+
     # Mensaje de verificación
     verification_msg = await update.message.reply_text("🔍 Verificando canal y permisos...")
-    
+
     session = get_session()
     try:
         # Verificar si ya existe
@@ -1192,21 +1193,21 @@ async def handle_channel_input(update: Update, context: ContextTypes.DEFAULT_TYP
         if existing:
             await verification_msg.edit_text("❌ Este canal ya está registrado")
             return
-        
+
         # Intentar obtener información del canal
         channel_name = None
         channel_username = None
         channel_id_final = channel_info
-        
+
         try:
             chat = await context.bot.get_chat(channel_info)
             channel_id_final = str(chat.id)
             channel_name = chat.title
             channel_username = chat.username
-            
+
             # Verificar permisos del bot
             has_permissions, permission_msg = await verify_bot_permissions(context.bot, channel_id_final)
-            
+
             if not has_permissions:
                 await verification_msg.edit_text(
                     f"⚠️ **Canal encontrado pero hay problemas:**\n\n"
@@ -1223,7 +1224,7 @@ async def handle_channel_input(update: Update, context: ContextTypes.DEFAULT_TYP
                     parse_mode='Markdown'
                 )
                 return
-            
+
         except Exception as e:
             await verification_msg.edit_text(
                 f"❌ **No se pudo acceder al canal:**\n\n"
@@ -1235,29 +1236,29 @@ async def handle_channel_input(update: Update, context: ContextTypes.DEFAULT_TYP
                 f"• Formato incorrecto"
             )
             return
-        
+
         # Crear canal
         channel = Channel(
             channel_id=channel_id_final,
             channel_name=channel_name,
             channel_username=channel_username
         )
-        
+
         session.add(channel)
         session.commit()
-        
+
         # Enviar mensaje de confirmación al canal
         confirmation_message = await context.bot.send_message(
             chat_id=channel_id_final,
             text=f"✅ El bot ha sido añadido correctamente al canal: {channel_name or 'Sin nombre'}"
         )
-        
+
         # Programar eliminación del mensaje de confirmación en 30 segundos
         await asyncio.sleep(30)
         await context.bot.delete_message(chat_id=channel_id_final, message_id=confirmation_message.message_id)
 
         context.user_data.pop('state', None)
-        
+
         await verification_msg.edit_text(
             f"✅ **Canal añadido exitosamente!**\n\n"
             f"**Nombre:** {channel_name or 'Sin nombre'}\n"
@@ -1266,7 +1267,7 @@ async def handle_channel_input(update: Update, context: ContextTypes.DEFAULT_TYP
             f"**Permisos:** ✅ Verificados",
             parse_mode='Markdown'
         )
-        
+
     except Exception as e:
         session.rollback()
         logger.error(f"Error adding channel: {e}")
