@@ -258,10 +258,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("assign_post_channels_"):
         post_id = data.split('_')[3]
         await configure_channels_menu(query, context, post_id)
-    elif data.startswith("confirm_remove_post_channel_"):
+    elif data.startswith("remove_ch_"):
+        # Nuevo formato más corto para evitar el error
         parts = data.split('_')
-        post_id, channel_object_id = parts[4], parts[5]
-        await remove_post_channel(query, post_id, channel_object_id)
+        post_id, channel_index = parts[2], int(parts[3])
+        await remove_post_channel_by_index(query, post_id, channel_index)
     
     # Asignación de canales a posts
     elif data.startswith("toggle_channel_"):
@@ -271,6 +272,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("save_assignments_"):
         post_id = data.split('_')[2]
         await save_channel_assignments(query, context, post_id)
+    
+    # Nuevos callbacks para notificaciones
+    elif data.startswith("resend_post_"):
+        post_id = data.split('_')[2]
+        await resend_post_from_notification(query, context, post_id)
+    elif data.startswith("delete_all_posts_"):
+        post_id = data.split('_')[3]
+        await delete_all_post_messages(query, context, post_id)
 
 async def list_posts(query):
     posts = Post.find_active()
@@ -734,76 +743,18 @@ async def confirm_manual_send(query, context: ContextTypes.DEFAULT_TYPE, post_id
     await query.edit_message_text("📤 Enviando post...")
     
     try:
-        post = Post.find_by_id(post_id)
-        post_channels = PostChannel.find_by_post_id(post_id)
-        schedule = PostSchedule.find_by_post_id(post_id)
+        # Usar la función del scheduler para envío y notificación
+        from scheduler import send_post_to_channels_with_notification
+        await send_post_to_channels_with_notification(context.bot, post_id, is_manual=True)
         
-        if not post or not post_channels:
-            keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="list_posts")]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
-            await query.edit_message_text("❌ Error: Post o canales no encontrados.", reply_markup=reply_markup)
-            return
-        
-        sent_count = 0
-        error_count = 0
-        sent_messages = []
-        
-        for pc in post_channels:
-            try:
-                # Enviar mensaje
-                message = await send_content_to_channel(context.bot, pc.channel_id, post, schedule)
-                
-                if message:
-                    sent_count += 1
-                    sent_messages.append({
-                        'channel_id': pc.channel_id,
-                        'message_id': message.message_id
-                    })
-                    
-                    # Fijar si está configurado
-                    if schedule and schedule.pin_message:
-                        try:
-                            await context.bot.pin_chat_message(
-                                chat_id=pc.channel_id,
-                                message_id=message.message_id,
-                                disable_notification=True
-                            )
-                        except Exception as pin_error:
-                            logger.warning(f"No se pudo fijar mensaje: {pin_error}")
-                    
-                    # Programar eliminación si está configurado
-                    if schedule and schedule.delete_after_hours > 0:
-                        from scheduler import schedule_message_deletion
-                        schedule_message_deletion(
-                            context.bot, 
-                            pc.channel_id, 
-                            message.message_id, 
-                            schedule.delete_after_hours
-                        )
-                else:
-                    error_count += 1
-                    
-            except Exception as e:
-                error_count += 1
-                logger.error(f"Error sending to channel {pc.channel_id}: {e}")
-        
-        # Mostrar resultado
-        result_text = f"📊 **Resultado del Envío**\n\n"
-        result_text += f"✅ **Enviados:** {sent_count}\n"
-        result_text += f"❌ **Errores:** {error_count}\n"
-        result_text += f"📺 **Total canales:** {len(post_channels)}\n\n"
-        
-        if schedule and schedule.delete_after_hours > 0:
-            result_text += f"⏰ **Eliminación programada:** {schedule.delete_after_hours}h\n"
-        
-        if schedule and schedule.pin_message:
-            result_text += f"📌 **Mensajes fijados**\n"
-        
+        # Mostrar resultado básico
         keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data=f"post_{post_id}")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await query.edit_message_text(
-            result_text,
+            "📤 **Envío Completado**\n\n"
+            "✅ El post ha sido enviado\n"
+            "📊 Recibirás un reporte detallado en breve",
             reply_markup=reply_markup,
             parse_mode='Markdown'
         )
@@ -1055,14 +1006,15 @@ async def show_remove_post_channel_menu(query, post_id):
         return
     
     keyboard = []
-    for pc in post_channels:
+    for i, pc in enumerate(post_channels):
         channel = Channel.find_by_channel_id(pc.channel_id)
         if channel:
             name = channel.channel_name or channel.channel_username or channel.channel_id
+            # Usar índice en lugar del ObjectId para evitar el error
             keyboard.append([
                 InlineKeyboardButton(
-                    f"🗑️ {name}", 
-                    callback_data=f"confirm_remove_post_channel_{post_id}_{str(channel._id)}"
+                    f"🗑️ {name[:30]}...", 
+                    callback_data=f"remove_ch_{post_id}_{i}"
                 )
             ])
     
@@ -1075,30 +1027,32 @@ async def show_remove_post_channel_menu(query, post_id):
         parse_mode='Markdown'
     )
 
-async def remove_post_channel(query, post_id, channel_object_id):
-    """Eliminar un canal específico del post"""
+async def remove_post_channel_by_index(query, post_id, channel_index):
+    """Eliminar un canal específico del post por índice"""
     try:
-        from bson import ObjectId
-        from database import db
+        post_channels = PostChannel.find_by_post_id(post_id)
         
-        # Buscar el canal por ObjectId
-        channel_doc = db.channels.find_one({'_id': ObjectId(channel_object_id)})
-        if not channel_doc:
+        if channel_index >= len(post_channels):
             keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data=f"manage_post_channels_{post_id}")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text("❌ Canal no encontrado.", reply_markup=reply_markup)
             return
         
-        channel = Channel.from_dict(channel_doc)
+        # Obtener el canal a eliminar
+        pc_to_remove = post_channels[channel_index]
+        channel = Channel.find_by_channel_id(pc_to_remove.channel_id)
+        
+        from database import db
         
         # Eliminar la asignación del canal al post
         db.post_channels.delete_one({
             'post_id': str(post_id),
-            'channel_id': channel.channel_id
+            'channel_id': pc_to_remove.channel_id
         })
         
         # Eliminar el canal de la tabla channels también
-        db.channels.delete_one({'_id': ObjectId(channel_object_id)})
+        if channel:
+            db.channels.delete_one({'_id': channel._id})
         
         await query.answer("✅ Canal eliminado del post")
         await manage_post_channels_menu(query, None, post_id)
@@ -1290,6 +1244,31 @@ async def show_statistics(query):
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
+
+# --- FUNCIONES DE NOTIFICACIÓN ---
+async def resend_post_from_notification(query, context: ContextTypes.DEFAULT_TYPE, post_id):
+    """Reenviar post desde notificación"""
+    await query.answer("🔄 Reenviando post...")
+    
+    try:
+        from scheduler import send_post_to_channels_with_notification
+        await send_post_to_channels_with_notification(context.bot, post_id, is_manual=True)
+        await query.answer("✅ Post reenviado", show_alert=True)
+    except Exception as e:
+        logger.error(f"Error resending post: {e}")
+        await query.answer(f"❌ Error: {str(e)}", show_alert=True)
+
+async def delete_all_post_messages(query, context: ContextTypes.DEFAULT_TYPE, post_id):
+    """Eliminar todos los mensajes de un post desde notificación"""
+    await query.answer("🗑️ Eliminando mensajes...")
+    
+    try:
+        from scheduler import delete_all_post_messages_now
+        await delete_all_post_messages_now(context.bot, post_id)
+        await query.answer("✅ Mensajes eliminados", show_alert=True)
+    except Exception as e:
+        logger.error(f"Error deleting messages: {e}")
+        await query.answer(f"❌ Error: {str(e)}", show_alert=True)
 
 # --- MANEJO DE ENTRADA DE TEXTO ---
 async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
