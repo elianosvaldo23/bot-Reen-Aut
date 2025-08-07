@@ -42,7 +42,6 @@ async def start_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("📋 Mis Posts", callback_data="list_posts")],
         [InlineKeyboardButton("➕ Crear Post", callback_data="create_post")],
-        [InlineKeyboardButton("📺 Gestionar Canales", callback_data="manage_channels")],
         [InlineKeyboardButton("📊 Estadísticas", callback_data="statistics")]
     ]
     
@@ -159,7 +158,6 @@ async def back_to_start_user(query, context):
         disable_web_page_preview=False
     )
 
-# Modifica la función handle_callback para incluir los nuevos callbacks
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -187,13 +185,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await list_posts(query)
     elif data == "create_post":
         await create_post_prompt(query, context)
-    elif data == "manage_channels":
-        await manage_channels_menu(query)
     elif data == "statistics":
         await show_statistics(query)
-    
-    # Resto de las funciones existentes...
-    # (mantén todo el código existente de handle_callback)
     
     # Acciones de posts específicos
     elif data.startswith("post_"):
@@ -201,9 +194,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("configure_schedule_"):
         post_id = data.split('_')[2]
         await configure_schedule_menu(query, post_id)
-    elif data.startswith("configure_channels_"):
-        post_id = data.split('_')[2]
-        await configure_channels_menu(query, context, post_id)
+    elif data.startswith("manage_post_channels_"):
+        post_id = data.split('_')[3]
+        await manage_post_channels_menu(query, context, post_id)
     elif data.startswith("delete_post_"):
         post_id = data.split('_')[2]
         await confirm_delete_post(query, post_id)
@@ -249,18 +242,26 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         post_id = data.split('_')[2]
         await send_preview_to_admin(query, context, post_id)
     
-    # Gestión de canales
-    elif data == "add_channel":
-        await prompt_add_channel(query, context)
-    elif data == "add_channels_bulk":
-        await prompt_add_channels_bulk(query, context)
-    elif data == "remove_channel":
-        await show_remove_channel_menu(query)
-    elif data == "list_channels":
-        await show_channels_list(query)
-    elif data.startswith("remove_channel_"):
-        channel_id = data.split('_')[2]
-        await remove_channel(query, channel_id)
+    # Gestión de canales por post
+    elif data.startswith("add_post_channel_"):
+        post_id = data.split('_')[3]
+        await prompt_add_post_channel(query, context, post_id)
+    elif data.startswith("add_post_channels_bulk_"):
+        post_id = data.split('_')[4]
+        await prompt_add_post_channels_bulk(query, context, post_id)
+    elif data.startswith("remove_post_channel_"):
+        post_id = data.split('_')[3]
+        await show_remove_post_channel_menu(query, post_id)
+    elif data.startswith("list_post_channels_"):
+        post_id = data.split('_')[3]
+        await show_post_channels_list(query, post_id)
+    elif data.startswith("assign_post_channels_"):
+        post_id = data.split('_')[3]
+        await configure_channels_menu(query, context, post_id)
+    elif data.startswith("confirm_remove_post_channel_"):
+        parts = data.split('_')
+        post_id, channel_object_id = parts[4], parts[5]
+        await remove_post_channel(query, post_id, channel_object_id)
     
     # Asignación de canales a posts
     elif data.startswith("toggle_channel_"):
@@ -321,7 +322,7 @@ async def handle_post_action(query, data):
     
     keyboard = [
         [InlineKeyboardButton("⏰ Configurar Horario", callback_data=f"configure_schedule_{post_id}")],
-        [InlineKeyboardButton("📺 Asignar Canales", callback_data=f"configure_channels_{post_id}")],
+        [InlineKeyboardButton("📺 Gestionar Canales", callback_data=f"manage_post_channels_{post_id}")],
         [InlineKeyboardButton("👀 Vista Previa", callback_data=f"preview_{post_id}"),
          InlineKeyboardButton("📤 Enviar Ahora", callback_data=f"send_now_{post_id}")],
         [InlineKeyboardButton("🗑️ Eliminar Post", callback_data=f"delete_post_{post_id}")],
@@ -939,54 +940,50 @@ async def send_content_to_channel(bot: Bot, channel_id: str, post: Post, schedul
         logger.error(f"Error sending content to {channel_id}: {e}")
         return None
 
-# --- GESTIÓN DE CANALES ---
-async def manage_channels_menu(query):
+# --- GESTIÓN DE CANALES POR POST ---
+async def manage_post_channels_menu(query, context: ContextTypes.DEFAULT_TYPE, post_id):
+    """Menú principal de gestión de canales para un post específico"""
+    post = Post.find_by_id(post_id)
+    if not post:
+        keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="list_posts")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await query.edit_message_text("❌ Post no encontrado.", reply_markup=reply_markup)
+        return
+    
+    # Contar canales del post
+    channel_count = PostChannel.count_by_post_id(post_id)
+    
     keyboard = [
-        [InlineKeyboardButton("➕ Añadir Canal", callback_data="add_channel")],
-        [InlineKeyboardButton("📝 Añadir Canales en Masa", callback_data="add_channels_bulk")],
-        [InlineKeyboardButton("➖ Eliminar Canal", callback_data="remove_channel")],
-        [InlineKeyboardButton("📋 Ver Canales", callback_data="list_channels")],
-        [InlineKeyboardButton("🔙 Volver", callback_data="back_main")]
+        [InlineKeyboardButton("➕ Añadir Canal", callback_data=f"add_post_channel_{post_id}")],
+        [InlineKeyboardButton("📝 Añadir Canales en Masa", callback_data=f"add_post_channels_bulk_{post_id}")],
+        [InlineKeyboardButton("📋 Ver Canales", callback_data=f"list_post_channels_{post_id}")],
+        [InlineKeyboardButton("🎯 Asignar Canales", callback_data=f"assign_post_channels_{post_id}")],
+        [InlineKeyboardButton("➖ Eliminar Canal", callback_data=f"remove_post_channel_{post_id}")],
+        [InlineKeyboardButton("🔙 Volver", callback_data=f"post_{post_id}")]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
+    
     await query.edit_message_text(
-        "📺 **Gestión de Canales**\n\n"
-        "Selecciona una opción:",
+        f"📺 **Gestionar Canales del Post**\n\n"
+        f"**Post:** {post.name}\n"
+        f"**Canales actuales:** {channel_count}\n"
+        f"**Máximo permitido:** {MAX_CHANNELS_PER_POST}\n\n"
+        f"Selecciona una opción:",
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
 
-async def verify_bot_permissions(bot: Bot, channel_id: str):
-    """Verifica si el bot es administrador del canal y tiene los permisos requeridos"""
-    try:
-        chat_member = await bot.get_chat_member(channel_id, bot.id)
-        
-        if chat_member.status not in ['administrator', 'creator']:
-            return False, "El bot no es administrador en el canal"
-        
-        # Verificar permisos específicos
-        if chat_member.status == 'administrator':
-            if not chat_member.can_post_messages:
-                return False, "El bot no tiene permisos para enviar mensajes"
-            if not chat_member.can_edit_messages:
-                return False, "El bot no tiene permisos para editar mensajes"
-            if not chat_member.can_delete_messages:
-                return False, "El bot no tiene permisos para eliminar mensajes"
-        
-        return True, "Permisos correctos"
-        
-    except Exception as e:
-        return False, f"Error verificando permisos: {str(e)}"
-
-async def prompt_add_channel(query, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['state'] = 'waiting_channel'
+async def prompt_add_post_channel(query, context: ContextTypes.DEFAULT_TYPE, post_id):
+    """Solicitar información para añadir un canal al post"""
+    context.user_data['state'] = 'waiting_post_channel'
+    context.user_data['current_post_id'] = post_id
     
-    keyboard = [[InlineKeyboardButton("🔙 Cancelar", callback_data="manage_channels")]]
+    keyboard = [[InlineKeyboardButton("🔙 Cancelar", callback_data=f"manage_post_channels_{post_id}")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(
-        "➕ **Añadir Canal Individual**\n\n"
+        "➕ **Añadir Canal al Post**\n\n"
         "Envía el canal en uno de estos formatos:\n"
         "• `@nombre_canal`\n"
         "• `https://t.me/nombre_canal`\n"
@@ -996,14 +993,16 @@ async def prompt_add_channel(query, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown'
     )
 
-async def prompt_add_channels_bulk(query, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data['state'] = 'waiting_channels_bulk'
+async def prompt_add_post_channels_bulk(query, context: ContextTypes.DEFAULT_TYPE, post_id):
+    """Solicitar información para añadir canales en masa al post"""
+    context.user_data['state'] = 'waiting_post_channels_bulk'
+    context.user_data['current_post_id'] = post_id
     
-    keyboard = [[InlineKeyboardButton("🔙 Cancelar", callback_data="manage_channels")]]
+    keyboard = [[InlineKeyboardButton("🔙 Cancelar", callback_data=f"manage_post_channels_{post_id}")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(
-        "📝 **Añadir Canales en Masa**\n\n"
+        "📝 **Añadir Canales en Masa al Post**\n\n"
         "Envía múltiples canales, uno por línea:\n\n"
         "**Ejemplo:**\n"
         "`https://t.me/canal1`\n"
@@ -1018,104 +1017,144 @@ async def prompt_add_channels_bulk(query, context: ContextTypes.DEFAULT_TYPE):
         parse_mode='Markdown'
     )
 
-async def show_channels_list(query):
-    channels = Channel.find_all()
+async def show_post_channels_list(query, post_id):
+    """Mostrar lista de canales asignados a un post"""
+    post_channels = PostChannel.find_by_post_id(post_id)
     
-    if not channels:
-        keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="manage_channels")]]
+    if not post_channels:
+        keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data=f"manage_post_channels_{post_id}")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text("📭 No hay canales registrados.", reply_markup=reply_markup)
+        await query.edit_message_text("📭 No hay canales asignados a este post.", reply_markup=reply_markup)
         return
     
-    message = "📺 **Canales Registrados:**\n\n"
-    for i, channel in enumerate(channels, 1):
-        name = channel.channel_name or channel.channel_username or channel.channel_id
-        message += f"{i}. `{name}`\n"
+    # Obtener información de los canales
+    channels_info = []
+    for pc in post_channels:
+        channel = Channel.find_by_channel_id(pc.channel_id)
+        if channel:
+            name = channel.channel_name or channel.channel_username or channel.channel_id
+            channels_info.append(f"• `{name}`")
     
-    keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="manage_channels")]]
+    message = f"📺 **Canales del Post:**\n\n"
+    message += "\n".join(channels_info)
+    message += f"\n\n**Total:** {len(channels_info)} canales"
+    
+    keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data=f"manage_post_channels_{post_id}")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(message, reply_markup=reply_markup, parse_mode='Markdown')
 
-async def show_remove_channel_menu(query):
-    channels = Channel.find_all()
+async def show_remove_post_channel_menu(query, post_id):
+    """Mostrar menú para eliminar canales del post"""
+    post_channels = PostChannel.find_by_post_id(post_id)
     
-    if not channels:
-        keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="manage_channels")]]
+    if not post_channels:
+        keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data=f"manage_post_channels_{post_id}")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await query.edit_message_text("📭 No hay canales para eliminar.", reply_markup=reply_markup)
+        await query.edit_message_text("📭 No hay canales para eliminar de este post.", reply_markup=reply_markup)
         return
     
     keyboard = []
-    for channel in channels:
-        name = channel.channel_name or channel.channel_username or channel.channel_id
-        keyboard.append([
-            InlineKeyboardButton(f"🗑️ {name}", callback_data=f"remove_channel_{str(channel._id)}")
-        ])
+    for pc in post_channels:
+        channel = Channel.find_by_channel_id(pc.channel_id)
+        if channel:
+            name = channel.channel_name or channel.channel_username or channel.channel_id
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"🗑️ {name}", 
+                    callback_data=f"confirm_remove_post_channel_{post_id}_{str(channel._id)}"
+                )
+            ])
     
-    keyboard.append([InlineKeyboardButton("🔙 Volver", callback_data="manage_channels")])
+    keyboard.append([InlineKeyboardButton("🔙 Volver", callback_data=f"manage_post_channels_{post_id}")])
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(
-        "➖ **Eliminar Canal**\n\nSelecciona el canal:",
+        "➖ **Eliminar Canal del Post**\n\nSelecciona el canal:",
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
 
-async def remove_channel(query, channel_id):
+async def remove_post_channel(query, post_id, channel_object_id):
+    """Eliminar un canal específico del post"""
     try:
-        # Buscar canal por ObjectId
         from bson import ObjectId
         from database import db
         
-        channel_doc = db.channels.find_one({'_id': ObjectId(channel_id)})
-        if channel_doc:
-            channel = Channel.from_dict(channel_doc)
-            if channel.delete():
-                await query.answer("✅ Canal eliminado correctamente")
-                await manage_channels_menu(query)
-            else:
-                keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="manage_channels")]]
-                reply_markup = InlineKeyboardMarkup(keyboard)
-                await query.edit_message_text("❌ Error al eliminar el canal.", reply_markup=reply_markup)
-        else:
-            keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="manage_channels")]]
+        # Buscar el canal por ObjectId
+        channel_doc = db.channels.find_one({'_id': ObjectId(channel_object_id)})
+        if not channel_doc:
+            keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data=f"manage_post_channels_{post_id}")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
             await query.edit_message_text("❌ Canal no encontrado.", reply_markup=reply_markup)
+            return
+        
+        channel = Channel.from_dict(channel_doc)
+        
+        # Eliminar la asignación del canal al post
+        db.post_channels.delete_one({
+            'post_id': str(post_id),
+            'channel_id': channel.channel_id
+        })
+        
+        # Eliminar el canal de la tabla channels también
+        db.channels.delete_one({'_id': ObjectId(channel_object_id)})
+        
+        await query.answer("✅ Canal eliminado del post")
+        await manage_post_channels_menu(query, None, post_id)
+        
     except Exception as e:
-        logger.error(f"Error removing channel: {e}")
-        keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data="manage_channels")]]
+        logger.error(f"Error removing post channel: {e}")
+        keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data=f"manage_post_channels_{post_id}")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(f"❌ Error: {str(e)}", reply_markup=reply_markup)
 
 # --- ASIGNACIÓN DE CANALES A POSTS ---
 async def configure_channels_menu(query, context: ContextTypes.DEFAULT_TYPE, post_id):
-    all_channels = Channel.find_all()
-    if not all_channels:
-        keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data=f"post_{post_id}")]]
+    """Menú para asignar/desasignar canales del post"""
+    # Obtener canales del post
+    post_channels = PostChannel.find_by_post_id(post_id)
+    post_channel_ids = [pc.channel_id for pc in post_channels]
+    
+    # Obtener todos los canales del post desde la tabla channels
+    all_post_channels = []
+    for channel_id in post_channel_ids:
+        channel = Channel.find_by_channel_id(channel_id)
+        if channel:
+            all_post_channels.append(channel)
+    
+    if not all_post_channels:
+        keyboard = [[InlineKeyboardButton("🔙 Volver", callback_data=f"manage_post_channels_{post_id}")]]
         reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(
-            "❌ No hay canales disponibles.\nPrimero añade canales.",
+            "❌ No hay canales disponibles para este post.\nPrimero añade canales al post.",
             reply_markup=reply_markup
         )
         return
     
-    # Obtener canales asignados actualmente
-    assigned = PostChannel.find_by_post_id(post_id)
-    assigned_ids = [pc.channel_id for pc in assigned]
-    
-    # Guardar selección actual
-    context.user_data['channel_assignments'] = assigned_ids.copy()
+    # Guardar selección actual (todos están seleccionados por defecto)
+    context.user_data['channel_assignments'] = post_channel_ids.copy()
     context.user_data['assigning_post_id'] = post_id
     
     await update_channels_menu(query, context, post_id)
 
 async def update_channels_menu(query, context: ContextTypes.DEFAULT_TYPE, post_id):
-    all_channels = Channel.find_all()
+    """Actualizar el menú de asignación de canales"""
+    # Obtener canales del post
+    post_channels = PostChannel.find_by_post_id(post_id)
+    post_channel_ids = [pc.channel_id for pc in post_channels]
+    
+    # Obtener todos los canales del post
+    all_post_channels = []
+    for channel_id in post_channel_ids:
+        channel = Channel.find_by_channel_id(channel_id)
+        if channel:
+            all_post_channels.append(channel)
+    
     selected_channels = context.user_data.get('channel_assignments', [])
     
     keyboard = []
-    for channel in all_channels:
+    for channel in all_post_channels:
         status = "✅" if channel.channel_id in selected_channels else "❌"
         name = channel.channel_name or channel.channel_username or channel.channel_id
         keyboard.append([
@@ -1126,48 +1165,47 @@ async def update_channels_menu(query, context: ContextTypes.DEFAULT_TYPE, post_i
         ])
     
     keyboard.append([InlineKeyboardButton("💾 Guardar", callback_data=f"save_assignments_{post_id}")])
-    keyboard.append([InlineKeyboardButton("🔙 Cancelar", callback_data=f"post_{post_id}")])
+    keyboard.append([InlineKeyboardButton("🔙 Cancelar", callback_data=f"manage_post_channels_{post_id}")])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(
-        f"📺 **Asignar Canales**\n\n"
-        f"Seleccionados: {len(selected_channels)}/{MAX_CHANNELS_PER_POST}",
+        f"🎯 **Asignar Canales para Publicación**\n\n"
+        f"Seleccionados: {len(selected_channels)}/{len(all_post_channels)}\n\n"
+        f"Los canales seleccionados recibirán las publicaciones automáticas.",
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
 
 async def toggle_channel_assignment(query, context: ContextTypes.DEFAULT_TYPE, post_id, channel_id):
+    """Alternar la asignación de un canal"""
     selected_channels = context.user_data.get('channel_assignments', [])
     
     if channel_id in selected_channels:
         selected_channels.remove(channel_id)
     else:
-        if len(selected_channels) >= MAX_CHANNELS_PER_POST:
-            await query.answer(f"❌ Máximo {MAX_CHANNELS_PER_POST} canales", show_alert=True)
-            return
         selected_channels.append(channel_id)
     
     context.user_data['channel_assignments'] = selected_channels
     await update_channels_menu(query, context, post_id)
 
 async def save_channel_assignments(query, context: ContextTypes.DEFAULT_TYPE, post_id):
+    """Guardar las asignaciones de canales"""
     selected_channels = context.user_data.get('channel_assignments', [])
     
     try:
-        # Eliminar asignaciones existentes
-        PostChannel.delete_by_post_id(post_id)
-        
-        # Añadir nuevas asignaciones
-        for channel_id in selected_channels:
-            post_channel = PostChannel(post_id=post_id, channel_id=channel_id)
-            post_channel.save()
+        # No eliminamos las asignaciones existentes, solo actualizamos el estado
+        # Los canales no seleccionados no recibirán publicaciones pero siguen en la base
         
         context.user_data.pop('channel_assignments', None)
         context.user_data.pop('assigning_post_id', None)
         
-        await query.answer(f"✅ {len(selected_channels)} canales asignados")
-        await handle_post_action(query, f"post_{post_id}")
+        # Actualizar las asignaciones activas
+        # Aquí podrías añadir un campo 'is_active' a PostChannel si quisieras
+        # Por simplicidad, mantenemos la lógica actual
+        
+        await query.answer(f"✅ {len(selected_channels)} canales configurados para publicación")
+        await manage_post_channels_menu(query, context, post_id)
         
     except Exception as e:
         logger.error(f"Error saving assignments: {e}")
@@ -1195,6 +1233,10 @@ async def confirm_delete_post(query, post_id):
     await query.edit_message_text(
         f"⚠️ **Confirmar Eliminación**\n\n"
         f"¿Eliminar **{post.name}**?\n"
+        f"Esta acción eliminará:\n"
+        f"• El post y su configuración\n"
+        f"• Todos los canales asociados\n"
+        f"• Los horarios programados\n\n"
         f"Esta acción es irreversible.",
         reply_markup=reply_markup,
         parse_mode='Markdown'
@@ -1263,10 +1305,10 @@ async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_time_input(update, context, text)
     elif state == 'waiting_delete_hours':
         await handle_delete_hours_input(update, context, text)
-    elif state == 'waiting_channel':
-        await handle_channel_input(update, context, text)
-    elif state == 'waiting_channels_bulk':
-        await handle_channels_bulk_input(update, context, text)
+    elif state == 'waiting_post_channel':
+        await handle_post_channel_input(update, context, text)
+    elif state == 'waiting_post_channels_bulk':
+        await handle_post_channels_bulk_input(update, context, text)
 
 async def handle_post_name_input(update, context, text):
     """Manejar entrada del nombre del post"""
@@ -1312,7 +1354,7 @@ async def handle_post_name_input(update, context, text):
         # Crear botones de acción rápida
         keyboard = [
             [InlineKeyboardButton("⚙️ Configurar", callback_data=f"post_{str(post._id)}")],
-            [InlineKeyboardButton("📺 Asignar Canales", callback_data=f"configure_channels_{str(post._id)}")],
+            [InlineKeyboardButton("📺 Gestionar Canales", callback_data=f"manage_post_channels_{str(post._id)}")],
             [InlineKeyboardButton("📤 Enviar Ahora", callback_data=f"send_now_{str(post._id)}")],
             [InlineKeyboardButton("🏠 Menú Principal", callback_data="back_main")]
         ]
@@ -1384,7 +1426,13 @@ async def handle_delete_hours_input(update, context, text):
         logger.error(f"Error setting delete hours: {e}")
         await update.message.reply_text(f"❌ Error: {str(e)}")
 
-async def handle_channel_input(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
+async def handle_post_channel_input(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
+    """Manejar entrada de canal para un post específico"""
+    post_id = context.user_data.get('current_post_id')
+    if not post_id:
+        await update.message.reply_text("❌ Error: No se encontró el post.")
+        return
+
     channel_info = extract_channel_info(text)
 
     if not channel_info:
@@ -1396,14 +1444,22 @@ async def handle_channel_input(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return
 
+    # Verificar límite de canales para este post
+    current_count = PostChannel.count_by_post_id(post_id)
+    if current_count >= MAX_CHANNELS_PER_POST:
+        await update.message.reply_text(f"❌ Máximo {MAX_CHANNELS_PER_POST} canales por post.")
+        return
+
     # Mensaje de verificación
     verification_msg = await update.message.reply_text("🔍 Verificando canal y permisos...")
 
     try:
-        # Verificar si ya existe
-        existing = Channel.find_by_channel_id(channel_info)
-        if existing:
-            await verification_msg.edit_text("❌ Este canal ya está registrado")
+        # Verificar si ya existe en este post
+        existing_post_channel = PostChannel.find_by_post_id(post_id)
+        existing_channel_ids = [pc.channel_id for pc in existing_post_channel]
+        
+        if channel_info in existing_channel_ids or f"@{channel_info}" in existing_channel_ids:
+            await verification_msg.edit_text("❌ Este canal ya está asignado a este post")
             return
 
         # Intentar obtener información del canal
@@ -1449,37 +1505,40 @@ async def handle_channel_input(update: Update, context: ContextTypes.DEFAULT_TYP
             )
             return
 
-        # Crear canal
-        channel = Channel(
-            channel_id=channel_id_final,
-            channel_name=channel_name,
-            channel_username=channel_username
-        )
+        # Crear o encontrar canal
+        channel = Channel.find_by_channel_id(channel_id_final)
+        if not channel:
+            channel = Channel(
+                channel_id=channel_id_final,
+                channel_name=channel_name,
+                channel_username=channel_username
+            )
+            if not channel.save():
+                await verification_msg.edit_text("❌ Error al guardar el canal")
+                return
 
-        if not channel.save():
-            await verification_msg.edit_text("❌ Error al guardar el canal")
+        # Crear asignación post-canal
+        post_channel = PostChannel(post_id=post_id, channel_id=channel_id_final)
+        if not post_channel.save():
+            await verification_msg.edit_text("❌ Error al asignar el canal al post")
             return
 
         # Enviar mensaje de confirmación al canal
         try:
             confirmation_message = await context.bot.send_message(
                 chat_id=channel_id_final,
-                text=f"✅ El bot ha sido añadido correctamente al canal: {channel_name or 'Sin nombre'}"
+                text=f"✅ Canal añadido al post correctamente"
             )
-
-            # Programar eliminación del mensaje de confirmación en 30 segundos
-            await asyncio.sleep(30)
-            try:
-                await context.bot.delete_message(chat_id=channel_id_final, message_id=confirmation_message.message_id)
-            except:
-                pass
+            # Programar eliminación del mensaje de confirmación
+            asyncio.create_task(delete_confirmation_message(context.bot, channel_id_final, confirmation_message.message_id))
         except:
             pass
 
         context.user_data.pop('state', None)
+        context.user_data.pop('current_post_id', None)
 
         await verification_msg.edit_text(
-            f"✅ **Canal añadido exitosamente!**\n\n"
+            f"✅ **Canal añadido al post exitosamente!**\n\n"
             f"**Nombre:** {channel_name or 'Sin nombre'}\n"
             f"**Username:** @{channel_username or 'Sin username'}\n"
             f"**ID:** `{channel_id_final}`\n"
@@ -1488,15 +1547,26 @@ async def handle_channel_input(update: Update, context: ContextTypes.DEFAULT_TYP
         )
 
     except Exception as e:
-        logger.error(f"Error adding channel: {e}")
+        logger.error(f"Error adding channel to post: {e}")
         await verification_msg.edit_text(f"❌ Error: {str(e)}")
 
-async def handle_channels_bulk_input(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
-    """Manejar entrada de canales en masa"""
+async def handle_post_channels_bulk_input(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str):
+    """Manejar entrada de canales en masa para un post específico"""
+    post_id = context.user_data.get('current_post_id')
+    if not post_id:
+        await update.message.reply_text("❌ Error: No se encontró el post.")
+        return
+
     lines = text.strip().split('\n')
     
     if len(lines) > 20:
         await update.message.reply_text("❌ Máximo 20 canales por vez")
+        return
+    
+    # Verificar límite total
+    current_count = PostChannel.count_by_post_id(post_id)
+    if current_count + len(lines) > MAX_CHANNELS_PER_POST:
+        await update.message.reply_text(f"❌ Excederías el límite de {MAX_CHANNELS_PER_POST} canales por post")
         return
     
     # Mensaje de progreso
@@ -1504,6 +1574,10 @@ async def handle_channels_bulk_input(update: Update, context: ContextTypes.DEFAU
     
     channels_to_add = []
     errors = []
+    
+    # Obtener canales ya asignados al post
+    existing_post_channels = PostChannel.find_by_post_id(post_id)
+    existing_channel_ids = [pc.channel_id for pc in existing_post_channels]
     
     # Extraer información de cada línea
     for i, line in enumerate(lines, 1):
@@ -1516,10 +1590,9 @@ async def handle_channels_bulk_input(update: Update, context: ContextTypes.DEFAU
             errors.append(f"Línea {i}: Formato inválido")
             continue
             
-        # Verificar si ya existe
-        existing = Channel.find_by_channel_id(channel_info)
-        if existing:
-            errors.append(f"Línea {i}: Canal ya registrado")
+        # Verificar si ya existe en este post
+        if channel_info in existing_channel_ids or f"@{channel_info}" in existing_channel_ids:
+            errors.append(f"Línea {i}: Canal ya asignado al post")
             continue
             
         channels_to_add.append((i, channel_info, line))
@@ -1548,14 +1621,21 @@ async def handle_channels_bulk_input(update: Update, context: ContextTypes.DEFAU
                 errors.append(f"Línea {line_num}: {permission_msg}")
                 continue
 
-            # Crear canal
-            channel = Channel(
-                channel_id=channel_id_final,
-                channel_name=channel_name,
-                channel_username=channel_username
-            )
+            # Crear o encontrar canal
+            channel = Channel.find_by_channel_id(channel_id_final)
+            if not channel:
+                channel = Channel(
+                    channel_id=channel_id_final,
+                    channel_name=channel_name,
+                    channel_username=channel_username
+                )
+                if not channel.save():
+                    errors.append(f"Línea {line_num}: Error al guardar canal")
+                    continue
 
-            if channel.save():
+            # Crear asignación post-canal
+            post_channel = PostChannel(post_id=post_id, channel_id=channel_id_final)
+            if post_channel.save():
                 added_channels.append({
                     'line': line_num,
                     'name': channel_name or channel_username or channel_id_final,
@@ -1566,24 +1646,25 @@ async def handle_channels_bulk_input(update: Update, context: ContextTypes.DEFAU
                 try:
                     confirmation_message = await context.bot.send_message(
                         chat_id=channel_id_final,
-                        text=f"✅ Bot añadido correctamente"
+                        text=f"✅ Canal añadido al post correctamente"
                     )
                     # Programar eliminación en background
                     asyncio.create_task(delete_confirmation_message(context.bot, channel_id_final, confirmation_message.message_id))
                 except:
                     pass
             else:
-                errors.append(f"Línea {line_num}: Error al guardar")
+                errors.append(f"Línea {line_num}: Error al asignar al post")
                 
         except Exception as e:
             errors.append(f"Línea {line_num}: {str(e)}")
     
     # Limpiar estado
     context.user_data.pop('state', None)
+    context.user_data.pop('current_post_id', None)
     
     # Mostrar resultado
     result_text = f"📊 **Resultado del Procesamiento**\n\n"
-    result_text += f"✅ **Añadidos:** {len(added_channels)}\n"
+    result_text += f"✅ **Añadidos al post:** {len(added_channels)}\n"
     result_text += f"❌ **Errores:** {len(errors)}\n"
     result_text += f"📝 **Total procesados:** {len(lines)}\n\n"
     
@@ -1603,6 +1684,28 @@ async def handle_channels_bulk_input(update: Update, context: ContextTypes.DEFAU
             result_text += f"• ... y {len(errors) - 5} errores más\n"
     
     await progress_msg.edit_text(result_text, parse_mode='Markdown')
+
+async def verify_bot_permissions(bot: Bot, channel_id: str):
+    """Verifica si el bot es administrador del canal y tiene los permisos requeridos"""
+    try:
+        chat_member = await bot.get_chat_member(channel_id, bot.id)
+        
+        if chat_member.status not in ['administrator', 'creator']:
+            return False, "El bot no es administrador en el canal"
+        
+        # Verificar permisos específicos
+        if chat_member.status == 'administrator':
+            if not chat_member.can_post_messages:
+                return False, "El bot no tiene permisos para enviar mensajes"
+            if not chat_member.can_edit_messages:
+                return False, "El bot no tiene permisos para editar mensajes"
+            if not chat_member.can_delete_messages:
+                return False, "El bot no tiene permisos para eliminar mensajes"
+        
+        return True, "Permisos correctos"
+        
+    except Exception as e:
+        return False, f"Error verificando permisos: {str(e)}"
 
 async def delete_confirmation_message(bot: Bot, channel_id: str, message_id: int):
     """Eliminar mensaje de confirmación después de 30 segundos"""
