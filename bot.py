@@ -7,6 +7,7 @@ from handlers import (
     handle_text_input, admin_only
 )
 from scheduler import start_scheduler
+from health_server import health_server  # Nuevo import
 
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -15,6 +16,9 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 def main():
+    # Iniciar servidor de salud ANTES que el bot
+    health_server.start()
+    
     application = Application.builder().token(BOT_TOKEN).build()
     
     # Handlers
@@ -36,7 +40,7 @@ def main():
     # Iniciar scheduler
     start_scheduler(application)
     
-    logger.info("🤖 Bot iniciado correctamente...")
+    logger.info("🤖 Bot y Health Server iniciados correctamente...")
     application.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == '__main__':
