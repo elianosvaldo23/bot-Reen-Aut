@@ -46,6 +46,10 @@ class MongoDB:
             # Índices para scheduled_jobs
             self._db.scheduled_jobs.create_index([("post_id", 1), ("is_completed", 1)])
             
+            # Nuevos índices para notificaciones
+            self._db.sent_messages.create_index([("post_id", 1), ("deleted", 1)])
+            self._db.deletion_stats.create_index([("post_id", 1), ("send_time", 1)])
+            
         except Exception as e:
             logger.error(f"Error creando índices: {e}")
     
@@ -151,6 +155,8 @@ class Post:
                 db.post_channels.delete_many({'post_id': post_id_str})
                 db.post_schedules.delete_many({'post_id': post_id_str})
                 db.scheduled_jobs.delete_many({'post_id': post_id_str})
+                db.sent_messages.delete_many({'post_id': post_id_str})
+                db.deletion_stats.delete_many({'post_id': post_id_str})
                 db.posts.delete_one({'_id': self._id})
                 return True
         except Exception as e:
