@@ -27,8 +27,18 @@ def get_cuba_time():
     cuba_tz = pytz.timezone(TIMEZONE)
     return datetime.now(cuba_tz)
 
-@admin_only
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    
+    # Si es administrador, mostrar panel de admin
+    if user_id == ADMIN_ID:
+        await start_admin_panel(update, context)
+    else:
+        # Si es usuario normal, mostrar mensaje de bienvenida
+        await start_user_welcome(update, context)
+
+async def start_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Panel de administración para el admin"""
     keyboard = [
         [InlineKeyboardButton("📋 Mis Posts", callback_data="list_posts")],
         [InlineKeyboardButton("➕ Crear Post", callback_data="create_post")],
@@ -51,16 +61,128 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif update.callback_query:
         await update.callback_query.edit_message_text(message_text, reply_markup=reply_markup, parse_mode='Markdown')
 
-@admin_only
+async def start_user_welcome(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Mensaje de bienvenida para usuarios no administradores"""
+    user = update.effective_user
+    username = user.username if user.username else user.first_name
+    
+    # Botón de beneficios
+    keyboard = [
+        [InlineKeyboardButton("🎁 Beneficios del Bot", callback_data="show_benefits")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    # Mensaje con enlaces incrustados
+    message_text = (
+        f"Bienvenido **{username}** al bot de Publicidad de las listas "
+        f"[𝗥𝗲𝗱ᴬᴵ](https://t.me/listredai) y "
+        f"[𝗥𝗲𝗱ᴬᴵ 𝗫𝗫𝗫](https://t.me/listredaixxx) "
+        f"para añadir su canal a la lista o Alquilar el bot para su propia Lista "
+        f"consulte con mi Propietario: @osvaldo20032"
+    )
+    
+    await update.message.reply_text(
+        message_text, 
+        reply_markup=reply_markup, 
+        parse_mode='Markdown',
+        disable_web_page_preview=False
+    )
+
+async def show_benefits(query):
+    """Mostrar los beneficios del bot"""
+    benefits_text = (
+        "🎁 **Beneficios de ser Propietario del Bot**\n\n"
+        
+        "**🤖 Para el Propietario del Bot:**\n"
+        "• ✅ **Automatización Total** - Publicación automática 24/7\n"
+        "• ⏰ **Programación Flexible** - Configura horarios específicos\n"
+        "• 📺 **Gestión de Múltiples Canales** - Hasta 90 canales por post\n"
+        "• 🗑️ **Eliminación Automática** - Control total del contenido\n"
+        "• 📊 **Estadísticas Detalladas** - Monitoreo en tiempo real\n"
+        "• 🎯 **Personalización Completa** - Adapta el bot a tus necesidades\n"
+        "• 💰 **Monetización** - Genera ingresos con tu lista de canales\n"
+        "• 🔧 **Soporte Técnico** - Asistencia completa del desarrollador\n\n"
+        
+        "**📺 Beneficios para Canales en las Listas:**\n"
+        "• 🚀 **Mayor Visibilidad** - Exposición a miles de usuarios\n"
+        "• 👥 **Crecimiento de Suscriptores** - Aumento orgánico de miembros\n"
+        "• 🎯 **Audiencia Segmentada** - Usuarios interesados en tu nicho\n"
+        "• 📈 **Promoción Cruzada** - Intercambio de audiencias\n"
+        "• 🆓 **Publicidad Gratuita** - Promoción sin costo adicional\n"
+        "• 🤝 **Networking** - Conexión con otros administradores\n"
+        "• ⭐ **Credibilidad** - Respaldo de una lista reconocida\n\n"
+        
+        "**🎁 Beneficios Especiales:**\n"
+        "• 🔥 **Contenido Exclusivo** - Acceso a material premium\n"
+        "• 💎 **Prioridad en Promociones** - Destaque especial\n"
+        "• 📱 **Multi-plataforma** - Promoción en diferentes redes\n"
+        "• 🎪 **Eventos Especiales** - Participación en promociones masivas\n\n"
+        
+        "💬 **¿Interesado?** Contacta con @osvaldo20032\n"
+        "🚀 **¡Únete ahora y haz crecer tu canal!**"
+    )
+    
+    keyboard = [
+        [InlineKeyboardButton("📞 Contactar Propietario", url="https://t.me/osvaldo20032")],
+        [InlineKeyboardButton("🔙 Volver al Inicio", callback_data="back_to_start")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await query.edit_message_text(
+        benefits_text,
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+async def back_to_start_user(query, context):
+    """Volver al mensaje inicial para usuarios"""
+    user = query.from_user
+    username = user.username if user.username else user.first_name
+    
+    keyboard = [
+        [InlineKeyboardButton("🎁 Beneficios del Bot", callback_data="show_benefits")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    message_text = (
+        f"Bienvenido **{username}** al bot de Publicidad de las listas "
+        f"[𝗥𝗲𝗱ᴬᴵ](https://t.me/listredai) y "
+        f"[𝗥𝗲𝗱ᴬᴵ 𝗫𝗫𝗫](https://t.me/listredaixxx) "
+        f"para añadir su canal a la lista o Alquilar el bot para su propia Lista "
+        f"consulte con mi Propietario: @osvaldo20032"
+    )
+    
+    await query.edit_message_text(
+        message_text,
+        reply_markup=reply_markup,
+        parse_mode='Markdown',
+        disable_web_page_preview=False
+    )
+
+# Modifica la función handle_callback para incluir los nuevos callbacks
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     
     data = query.data
+    user_id = update.effective_user.id
     
-    # Navegación principal
+    # Callbacks para usuarios no administradores
+    if data == "show_benefits":
+        await show_benefits(query)
+        return
+    elif data == "back_to_start":
+        await back_to_start_user(query, context)
+        return
+    
+    # Verificar si es administrador para el resto de callbacks
+    if user_id != ADMIN_ID:
+        await query.answer("❌ No tienes permisos de administrador.", show_alert=True)
+        return
+    
+    # Navegación principal (solo para admin)
     if data == "back_main":
-        await start(update, context)
+        await start_admin_panel(update, context)
     elif data == "list_posts":
         await list_posts(query)
     elif data == "create_post":
@@ -69,6 +191,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await manage_channels_menu(query)
     elif data == "statistics":
         await show_statistics(query)
+    
+    # Resto de las funciones existentes...
+    # (mantén todo el código existente de handle_callback)
     
     # Acciones de posts específicos
     elif data.startswith("post_"):
