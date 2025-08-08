@@ -46,11 +46,9 @@ class MongoDB:
             # Índices para scheduled_jobs
             self._db.scheduled_jobs.create_index([("post_id", 1), ("is_completed", 1)])
             
-            # Índices para notificaciones y eliminación
+            # Nuevos índices para notificaciones
             self._db.sent_messages.create_index([("post_id", 1), ("deleted", 1)])
-            self._db.sent_messages.create_index([("post_id", 1), ("send_time", 1), ("deleted", 1)])
             self._db.deletion_stats.create_index([("post_id", 1), ("send_time", 1)])
-            self._db.notification_messages.create_index([("post_id", 1), ("send_time", 1), ("deleted", 1)])
             
         except Exception as e:
             logger.error(f"Error creando índices: {e}")
@@ -159,7 +157,6 @@ class Post:
                 db.scheduled_jobs.delete_many({'post_id': post_id_str})
                 db.sent_messages.delete_many({'post_id': post_id_str})
                 db.deletion_stats.delete_many({'post_id': post_id_str})
-                db.notification_messages.delete_many({'post_id': post_id_str})
                 db.posts.delete_one({'_id': self._id})
                 return True
         except Exception as e:
@@ -212,4 +209,209 @@ class PostSchedule:
                 db.post_schedules.update_one({'_id': self._id}, {'$set': self.to_dict()})
             else:
                 result = db.post_schedules.insert_one(self.to_dict())
-                self._id = result.inserted_
+                self._id = result.inserted_id
+            return True
+        except Exception as e:
+            logger.error(f"Error guardando horario: {e}")
+            return False
+    
+    @classmethod
+    def find_by_post_id(cls, post_id):
+        try:
+            doc = db.post_schedules.find_one({'post_id': str(post_id)})
+            return cls.from_dict(doc) if doc else None
+        except Exception as e:
+            logger.error(f"Error buscando horario: {e}")
+            return None
+    
+    @classmethod
+    def count_enabled(cls):
+        try:
+            return db.post_schedules.count_documents({'is_enabled': True})
+        except Exception as e:
+            logger.error(f"Error contando horarios: {e}")
+            return 0
+
+class Channel:
+    def __init__(self, channel_id, channel_name=None, channel_username=None, _id=None):
+        self.channel_id = channel_id
+        self.channel_name = channel_name
+        self.channel_username = channel_username
+        self._id = _id
+    
+    def to_dict(self):
+        doc = {
+            'channel_id': self.channel_id,
+            'channel_name': self.channel_name,
+            'channel_username': self.channel_username
+        }
+        if self._id:
+            doc['_id'] = self._id
+        return doc
+    
+    @classmethod
+    def from_dict(cls, doc):
+        return cls(
+            channel_id=doc['channel_id'],
+            channel_name=doc.get('channel_name'),
+            channel_username=doc.get('channel_username'),
+            _id=doc.get('_id')
+        )
+    
+    def save(self):
+        try:
+            if self._id:
+                db.channels.update_one({'_id': self._id}, {'$set': self.to_dict()})
+            else:
+                result = db.channels.insert_one(self.to_dict())
+                self._id = result.inserted_id
+            return True
+        except Exception as e:
+            logger.error(f"Error guardando canal: {e}")
+            return False
+    
+    @classmethod
+    def find_all(cls):
+        try:
+            docs = db.channels.find()
+            return [cls.from_dict(doc) for doc in docs]
+        except Exception as e:
+            logger.error(f"Error buscando canales: {e}")
+            return []
+    
+    @classmethod
+    def find_by_channel_id(cls, channel_id):
+        try:
+            doc = db.channels.find_one({'channel_id': channel_id})
+            return cls.from_dict(doc) if doc else None
+        except Exception as e:
+            logger.error(f"Error buscando canal: {e}")
+            return None
+    
+    @classmethod
+    def count_all(cls):
+        try:
+            return db.channels.count_documents({})
+        except Exception as e:
+            logger.error(f"Error contando canales: {e}")
+            return 0
+    
+    def delete(self):
+        try:
+            if self._id:
+                # Eliminar asignaciones
+                db.post_channels.delete_many({'channel_id': self.channel_id})
+                db.channels.delete_one({'_id': self._id})
+                return True
+        except Exception as e:
+            logger.error(f"Error eliminando canal: {e}")
+            return False
+
+class PostChannel:
+    def __init__(self, post_id, channel_id, _id=None):
+        self.post_id = str(post_id)
+        self.channel_id = channel_id
+        self._id = _id
+    
+    def to_dict(self):
+        doc = {
+            'post_id': self.post_id,
+            'channel_id': self.channel_id
+        }
+        if self._id:
+            doc['_id'] = self._id
+        return doc
+    
+    @classmethod
+    def from_dict(cls, doc):
+        return cls(
+            post_id=doc['post_id'],
+            channel_id=doc['channel_id'],
+            _id=doc.get('_id')
+        )
+    
+    def save(self):
+        try:
+            if self._id:
+                db.post_channels.update_one({'_id': self._id}, {'$set': self.to_dict()})
+            else:
+                result = db.post_channels.insert_one(self.to_dict())
+                self._id = result.inserted_id
+            return True
+        except Exception as e:
+            logger.error(f"Error guardando asignación: {e}")
+            return False
+    
+    @classmethod
+    def find_by_post_id(cls, post_id):
+        try:
+            docs = db.post_channels.find({'post_id': str(post_id)})
+            return [cls.from_dict(doc) for doc in docs]
+        except Exception as e:
+            logger.error(f"Error buscando asignaciones: {e}")
+            return []
+    
+    @classmethod
+    def count_by_post_id(cls, post_id):
+        try:
+            return db.post_channels.count_documents({'post_id': str(post_id)})
+        except Exception as e:
+            logger.error(f"Error contando asignaciones: {e}")
+            return 0
+    
+    @classmethod
+    def delete_by_post_id(cls, post_id):
+        try:
+            db.post_channels.delete_many({'post_id': str(post_id)})
+            return True
+        except Exception as e:
+            logger.error(f"Error eliminando asignaciones: {e}")
+            return False
+
+class ScheduledJob:
+    def __init__(self, post_id, job_type, scheduled_time, channel_id, 
+                 message_id=None, is_completed=False, _id=None):
+        self.post_id = str(post_id)
+        self.job_type = job_type
+        self.scheduled_time = scheduled_time
+        self.channel_id = channel_id
+        self.message_id = message_id
+        self.is_completed = is_completed
+        self._id = _id
+    
+    def to_dict(self):
+        doc = {
+            'post_id': self.post_id,
+            'job_type': self.job_type,
+            'scheduled_time': self.scheduled_time,
+            'channel_id': self.channel_id,
+            'message_id': self.message_id,
+            'is_completed': self.is_completed
+        }
+        if self._id:
+            doc['_id'] = self._id
+        return doc
+    
+    @classmethod
+    def from_dict(cls, doc):
+        return cls(
+            post_id=doc['post_id'],
+            job_type=doc['job_type'],
+            scheduled_time=doc['scheduled_time'],
+            channel_id=doc['channel_id'],
+            message_id=doc.get('message_id'),
+            is_completed=doc.get('is_completed', False),
+            _id=doc.get('_id')
+        )
+    
+    def save(self):
+        try:
+            if self._id:
+                db.scheduled_jobs.update_one({'_id': self._id}, {'$set': self.to_dict()})
+            else:
+                result = db.scheduled_jobs.insert_one(self.to_dict())
+                self._id = result.inserted_id
+            return True
+        except Exception as e:
+            logger.error(f"Error guardando trabajo: {e}")
+            return False
