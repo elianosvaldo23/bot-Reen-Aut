@@ -160,7 +160,7 @@ async def send_post_to_channels_with_notification(bot: Bot, post_id: str, is_man
         
         # Guardar información de mensajes enviados para eliminación posterior
         if sent_messages:
-            save_sent_messages_info(post_id, sent_messages)
+            save_sent_messages_info(post_id, sent_messages, send_time)
     
     except Exception as e:
         logger.error(f"Error in send_post_to_channels_with_notification: {e}")
@@ -249,13 +249,16 @@ async def send_post_notification(bot: Bot, post: Post, send_time: datetime,
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
-        # Enviar notificación
-        await bot.send_message(
+        # Enviar notificación y guardar el message_id para eliminar después
+        notification_msg = await bot.send_message(
             chat_id=ADMIN_ID,
             text=notification_text,
             reply_markup=reply_markup,
             parse_mode='Markdown'
         )
+        
+        # Guardar el ID del mensaje de notificación para eliminarlo después
+        save_notification_message_id(str(post._id), notification_msg.message_id, send_time)
         
         logger.info(f"Notificación de envío enviada para post {post._id}")
         
@@ -280,15 +283,18 @@ async def delete_message_with_notification(bot: Bot, channel_id: str, message_id
         logger.error(f"Error eliminando mensaje {message_id}: {e}")
     
     # Actualizar estadísticas globales de eliminación
-    update_deletion_stats(post_id, post_name, send_time, delete_time, success, error_msg)
+    await update_deletion_stats(bot, post_id, post_name, send_time, delete_time, success, error_msg)
 
-def save_sent_messages_info(post_id: str, sent_messages: list):
+def save_sent_messages_info(post_id: str, sent_messages: list, send_time: datetime):
     """Guarda información de mensajes enviados para tracking de eliminación"""
     try:
         from database import db
         
-        # Limpiar registros anteriores del mismo post
-        db.sent_messages.delete_many({'post_id': post_id})
+        # Limpiar registros anteriores del mismo post para este envío
+        db.sent_messages.delete_many({
+            'post_id': post_id,
+            'send_time': send_time
+        })
         
         # Guardar nuevos registros
         for msg_info in sent_messages:
@@ -296,6 +302,7 @@ def save_sent_messages_info(post_id: str, sent_messages: list):
                 'post_id': post_id,
                 'channel_id': msg_info['channel_id'],
                 'message_id': msg_info['message_id'],
+                'send_time': send_time,
                 'sent_at': datetime.utcnow(),
                 'deleted': False
             })
@@ -305,14 +312,34 @@ def save_sent_messages_info(post_id: str, sent_messages: list):
     except Exception as e:
         logger.error(f"Error guardando info de mensajes: {e}")
 
-def update_deletion_stats(post_id: str, post_name: str, send_time: datetime, 
-                         delete_time: datetime, success: bool, error_msg: str = None):
+def save_notification_message_id(post_id: str, notification_message_id: int, send_time: datetime):
+    """Guarda el ID del mensaje de notificación para eliminarlo después"""
+    try:
+        from database import db
+        
+        db.notification_messages.insert_one({
+            'post_id': post_id,
+            'message_id': notification_message_id,
+            'send_time': send_time,
+            'deleted': False
+        })
+        
+        logger.info(f"Guardado ID de notificación {notification_message_id} para post {post_id}")
+        
+    except Exception as e:
+        logger.error(f"Error guardando ID de notificación: {e}")
+
+async def update_deletion_stats(bot: Bot, post_id: str, post_name: str, send_time: datetime, 
+                               delete_time: datetime, success: bool, error_msg: str = None):
     """Actualiza estadísticas de eliminación y envía notificación final"""
     try:
         from database import db
         
         # Buscar o crear registro de estadísticas de eliminación
-        stats = db.deletion_stats.find_one({'post_id': post_id, 'send_time': send_time})
+        stats = db.deletion_stats.find_one({
+            'post_id': post_id, 
+            'send_time': send_time
+        })
         
         if not stats:
             stats = {
@@ -334,12 +361,18 @@ def update_deletion_stats(post_id: str, post_name: str, send_time: datetime,
             stats['deleted_count'] = stats.get('deleted_count', 0) + 1
             # Actualizar registro de mensaje como eliminado
             db.sent_messages.update_one(
-                {'post_id': post_id, 'deleted': False},
+                {
+                    'post_id': post_id, 
+                    'send_time': send_time,
+                    'deleted': False
+                },
                 {'$set': {'deleted': True, 'deleted_at': datetime.utcnow()}},
             )
         else:
             stats['failed_count'] = stats.get('failed_count', 0) + 1
             if error_msg:
+                if 'failed_reasons' not in stats:
+                    stats['failed_reasons'] = []
                 stats['failed_reasons'].append(error_msg)
         
         # Guardar estadísticas actualizadas
@@ -352,6 +385,7 @@ def update_deletion_stats(post_id: str, post_name: str, send_time: datetime,
         # Verificar si todos los mensajes han sido procesados
         pending_messages = db.sent_messages.count_documents({
             'post_id': post_id,
+            'send_time': send_time,
             'deleted': False
         })
         
@@ -363,18 +397,16 @@ def update_deletion_stats(post_id: str, post_name: str, send_time: datetime,
                 {'$set': {'notified': True}}
             )
             
-            # Programar envío de notificación final
-            from asyncio import create_task
-            create_task(send_deletion_notification(post_id, stats))
+            # Enviar notificación final
+            await send_deletion_notification(bot, post_id, stats)
             
     except Exception as e:
         logger.error(f"Error actualizando estadísticas de eliminación: {e}")
 
-async def send_deletion_notification(post_id: str, stats: dict):
+async def send_deletion_notification(bot: Bot, post_id: str, stats: dict):
     """Envía notificación final de eliminación al administrador"""
     try:
-        from main import application  # Importar la aplicación para obtener el bot
-        bot = application.bot
+        from database import db
         
         cuba_tz = pytz.timezone(TIMEZONE)
         send_time_formatted = stats['send_time'].strftime('%H:%M:%S - %d/%m/%Y')
@@ -391,7 +423,7 @@ async def send_deletion_notification(post_id: str, stats: dict):
         )
         
         # Añadir razones de fallo si las hay
-        if stats['failed_reasons']:
+        if stats.get('failed_reasons'):
             notification_text += "**Razones de fallo:**\n"
             unique_reasons = list(set(stats['failed_reasons']))  # Eliminar duplicados
             for i, reason in enumerate(unique_reasons[:5], 1):  # Mostrar solo las primeras 5
@@ -405,6 +437,31 @@ async def send_deletion_notification(post_id: str, stats: dict):
             text=notification_text,
             parse_mode='Markdown'
         )
+        
+        # Eliminar el mensaje de notificación original
+        notification_msg = db.notification_messages.find_one({
+            'post_id': post_id,
+            'send_time': stats['send_time'],
+            'deleted': False
+        })
+        
+        if notification_msg:
+            try:
+                await bot.delete_message(
+                    chat_id=ADMIN_ID,
+                    message_id=notification_msg['message_id']
+                )
+                
+                # Marcar como eliminado
+                db.notification_messages.update_one(
+                    {'_id': notification_msg['_id']},
+                    {'$set': {'deleted': True}}
+                )
+                
+                logger.info(f"Eliminado mensaje de notificación original para post {post_id}")
+                
+            except Exception as e:
+                logger.warning(f"No se pudo eliminar mensaje de notificación: {e}")
         
         logger.info(f"Notificación de eliminación enviada para post {post_id}")
         
@@ -422,9 +479,22 @@ async def delete_all_post_messages_now(bot: Bot, post_id: str):
             'deleted': False
         }))
         
+        if not pending_messages:
+            logger.info(f"No hay mensajes pendientes para eliminar del post {post_id}")
+            return
+        
         deleted_count = 0
         failed_count = 0
         failed_reasons = []
+        
+        # Obtener información del post
+        post = Post.find_by_id(post_id)
+        post_name = post.name if post else f"Post {post_id}"
+        
+        # Obtener el tiempo de envío más reciente
+        latest_send_time = max([msg['send_time'] for msg in pending_messages])
+        cuba_tz = pytz.timezone(TIMEZONE)
+        delete_time = datetime.now(cuba_tz)
         
         for msg_info in pending_messages:
             try:
@@ -453,10 +523,83 @@ async def delete_all_post_messages_now(bot: Bot, post_id: str):
             if scheduler.get_job(job_id):
                 scheduler.remove_job(job_id)
         
+        # Enviar notificación de eliminación manual
+        await send_manual_deletion_notification(
+            bot, post_id, post_name, latest_send_time, delete_time, 
+            len(pending_messages), deleted_count, failed_count, failed_reasons
+        )
+        
         logger.info(f"Eliminación manual completada: {deleted_count} exitosos, {failed_count} fallidos")
         
     except Exception as e:
         logger.error(f"Error en eliminación manual: {e}")
+
+async def send_manual_deletion_notification(bot: Bot, post_id: str, post_name: str, 
+                                           send_time: datetime, delete_time: datetime,
+                                           total_channels: int, deleted_count: int, 
+                                           failed_count: int, failed_reasons: list):
+    """Envía notificación de eliminación manual"""
+    try:
+        from database import db
+        
+        send_time_formatted = send_time.strftime('%H:%M:%S - %d/%m/%Y')
+        delete_time_formatted = delete_time.strftime('%H:%M:%S - %d/%m/%Y')
+        
+        notification_text = (
+            f"🗑️ **Eliminación Manual Completada**\n\n"
+            f"🕐 **Hora de envío:** {send_time_formatted}\n"
+            f"🗑️ **Hora de eliminación:** {delete_time_formatted}\n"
+            f"📝 **Post:** {post_name}\n"
+            f"📺 **Canales totales:** {total_channels}\n"
+            f"✅ **Eliminados:** {deleted_count}\n"
+            f"❌ **Eliminación fallida:** {failed_count}\n\n"
+        )
+        
+        # Añadir razones de fallo si las hay
+        if failed_reasons:
+            notification_text += "**Razones de fallo:**\n"
+            unique_reasons = list(set(failed_reasons))  # Eliminar duplicados
+            for i, reason in enumerate(unique_reasons[:5], 1):  # Mostrar solo las primeras 5
+                notification_text += f"{i}. {reason}\n"
+            if len(unique_reasons) > 5:
+                notification_text += f"... y {len(unique_reasons) - 5} razones más\n"
+        
+        # Enviar notificación
+        await bot.send_message(
+            chat_id=ADMIN_ID,
+            text=notification_text,
+            parse_mode='Markdown'
+        )
+        
+        # Eliminar mensaje de notificación original si existe
+        notification_msg = db.notification_messages.find_one({
+            'post_id': post_id,
+            'send_time': send_time,
+            'deleted': False
+        })
+        
+        if notification_msg:
+            try:
+                await bot.delete_message(
+                    chat_id=ADMIN_ID,
+                    message_id=notification_msg['message_id']
+                )
+                
+                # Marcar como eliminado
+                db.notification_messages.update_one(
+                    {'_id': notification_msg['_id']},
+                    {'$set': {'deleted': True}}
+                )
+                
+                logger.info(f"Eliminado mensaje de notificación original para post {post_id}")
+                
+            except Exception as e:
+                logger.warning(f"No se pudo eliminar mensaje de notificación: {e}")
+        
+        logger.info(f"Notificación de eliminación manual enviada para post {post_id}")
+        
+    except Exception as e:
+        logger.error(f"Error enviando notificación de eliminación manual: {e}")
 
 def schedule_message_deletion(bot: Bot, channel_id: str, message_id: int, hours: int):
     """Programar eliminación de mensaje específico"""
