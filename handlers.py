@@ -1248,27 +1248,61 @@ async def show_statistics(query):
 # --- FUNCIONES DE NOTIFICACIÓN ---
 async def resend_post_from_notification(query, context: ContextTypes.DEFAULT_TYPE, post_id):
     """Reenviar post desde notificación"""
-    await query.answer("🔄 Reenviando post...")
-    
     try:
+        # Primero editar el mensaje para mostrar que está procesando
+        await query.edit_message_text(
+            "🔄 **Procesando reenvío...**\n\n"
+            "Por favor espera mientras se reenvía el post.",
+            parse_mode='Markdown'
+        )
+        
+        # Ejecutar el reenvío
         from scheduler import send_post_to_channels_with_notification
         await send_post_to_channels_with_notification(context.bot, post_id, is_manual=True)
-        await query.answer("✅ Post reenviado", show_alert=True)
+        
+        # Notificar al usuario que la acción se completó
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text="✅ **Acción Completada**\n\n🔄 Reenvío realizado exitosamente",
+            parse_mode='Markdown'
+        )
+        
     except Exception as e:
         logger.error(f"Error resending post: {e}")
-        await query.answer(f"❌ Error: {str(e)}", show_alert=True)
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=f"❌ **Error en Reenvío**\n\n{str(e)}",
+            parse_mode='Markdown'
+        )
 
 async def delete_all_post_messages(query, context: ContextTypes.DEFAULT_TYPE, post_id):
     """Eliminar todos los mensajes de un post desde notificación"""
-    await query.answer("🗑️ Eliminando mensajes...")
-    
     try:
+        # Primero editar el mensaje para mostrar que está procesando
+        await query.edit_message_text(
+            "🗑️ **Procesando eliminación...**\n\n"
+            "Por favor espera mientras se eliminan los mensajes.",
+            parse_mode='Markdown'
+        )
+        
+        # Ejecutar la eliminación
         from scheduler import delete_all_post_messages_now
         await delete_all_post_messages_now(context.bot, post_id)
-        await query.answer("✅ Mensajes eliminados", show_alert=True)
+        
+        # Notificar al usuario que la acción se completó
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text="✅ **Acción Completada**\n\n🗑️ Eliminación realizada exitosamente",
+            parse_mode='Markdown'
+        )
+        
     except Exception as e:
         logger.error(f"Error deleting messages: {e}")
-        await query.answer(f"❌ Error: {str(e)}", show_alert=True)
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=f"❌ **Error en Eliminación**\n\n{str(e)}",
+            parse_mode='Markdown'
+        )
 
 # --- MANEJO DE ENTRADA DE TEXTO ---
 async def handle_text_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
